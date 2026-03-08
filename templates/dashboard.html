@@ -215,20 +215,74 @@
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.45.0/dist/apexcharts.min.js"></script>
     
     <script>
-        // 检查登录状态
-        fetch('/api/auth/check')
-            .then(response => {
-                if (!response.ok) {
-                    window.location.href = '/login';
+        // ==================== 通用API请求函数 ====================
+        /**
+         * 通用API请求函数
+         * @param {string} url - API地址
+         * @param {object} options - fetch选项
+         */
+        async function apiRequest(url, options = {}) {
+            const token = localStorage.getItem('token');
+            
+            if (!token) {
+                console.log('未找到token，跳转到登录页');
+                window.location.href = '/login';
+                throw new Error('未登录');
+            }
+            
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
                 }
-                return response.json();
-            })
-            .then(data => {
+            };
+            
+            const mergedOptions = {
+                ...defaultOptions,
+                ...options,
+                headers: {
+                    ...defaultOptions.headers,
+                    ...(options.headers || {})
+                }
+            };
+            
+            try {
+                const response = await fetch(url, mergedOptions);
+                
+                if (response.status === 401) {
+                    console.log('认证失败（401），跳转到登录页');
+                    localStorage.removeItem('token');
+                    window.location.href = '/login';
+                    throw new Error('未授权');
+                }
+                
+                return response;
+            } catch (error) {
+                console.error('API请求失败:', error);
+                throw error;
+            }
+        }
+        // ==================== 通用API函数添加完毕 ====================
+        
+        // 检查登录状态
+        async function checkAuth() {
+            try {
+                const response = await apiRequest('/api/auth/check');
+                const data = await response.json();
+                
                 if (data.authenticated) {
                     document.getElementById('current-user').textContent = data.user;
-                    loadDashboard();
+                    await loadDashboard();
                 }
-            });
+            } catch (error) {
+                console.error('认证检查失败:', error);
+            }
+        }
+        
+        // 页面加载时检查登录状态
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAuth();
+        });
         
         // 显示提示
         function showToast(message, type = 'success') {
@@ -257,126 +311,131 @@
         }
         
         // 加载仪表盘
-        function loadDashboard() {
+        async function loadDashboard() {
             const content = document.getElementById('main-content');
             
-            fetch('/api/stats')
-                .then(response => response.json())
-                .then(stats => {
-                    document.getElementById('online-count').textContent = stats.online;
-                    
-                    content.innerHTML = `
-                        <div class="row g-4">
-                            <div class="col-md-3">
-                                <div class="stat-card">
-                                    <div class="stat-icon" style="background: #e6f7ff; color: #1890ff;">
-                                        <i class="bi bi-calendar-day"></i>
-                                    </div>
-                                    <div class="stat-value">${stats.today}</div>
-                                    <div class="stat-label">今日截图</div>
-                                    <div class="mt-2 small ${stats.today > stats.yesterday ? 'text-success' : 'text-danger'}">
-                                        <i class="bi bi-arrow-${stats.today > stats.yesterday ? 'up' : 'down'}"></i>
-                                        ${Math.abs(stats.today - stats.yesterday)} 较昨日
-                                    </div>
+            try {
+                const response = await apiRequest('/api/stats');
+                const stats = await response.json();
+                
+                document.getElementById('online-count').textContent = stats.online;
+                
+                content.innerHTML = `
+                    <div class="row g-4">
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background: #e6f7ff; color: #1890ff;">
+                                    <i class="bi bi-calendar-day"></i>
                                 </div>
-                            </div>
-                            <div class="col-md-3">
-                                <div class="stat-card">
-                                    <div class="stat-icon" style="background: #f6ffed; color: #52c41a;">
-                                        <i class="bi bi-people"></i>
-                                    </div>
-                                    <div class="stat-value">${stats.online}</div>
-                                    <div class="stat-label">在线员工</div>
-                                    <div class="mt-2 small text-muted">总员工: ${stats.employees}</div>
-                                </div>
-                            </div>
-                            <div class="col-md-3">
-                                <div class="stat-card">
-                                    <div class="stat-icon" style="background: #fff7e6; color: #fa8c16;">
-                                        <i class="bi bi-database"></i>
-                                    </div>
-                                    <div class="stat-value">${stats.total}</div>
-                                    <div class="stat-label">累计截图</div>
-                                    <div class="mt-2 small text-muted">${stats.storage_mb} MB</div>
-                                </div>
-                            </div>
-                            <div class="col-md-3">
-                                <div class="stat-card">
-                                    <div class="stat-icon" style="background: #f9f0ff; color: #722ed1;">
-                                        <i class="bi bi-clock"></i>
-                                    </div>
-                                    <div class="stat-value">${stats.clients}</div>
-                                    <div class="stat-label">客户端数</div>
-                                    <div class="mt-2 small text-muted">活跃: ${stats.online}</div>
+                                <div class="stat-value">${stats.today}</div>
+                                <div class="stat-label">今日截图</div>
+                                <div class="mt-2 small ${stats.today > stats.yesterday ? 'text-success' : 'text-danger'}">
+                                    <i class="bi bi-arrow-${stats.today > stats.yesterday ? 'up' : 'down'}"></i>
+                                    ${Math.abs(stats.today - stats.yesterday)} 较昨日
                                 </div>
                             </div>
                         </div>
-                        
-                        <div class="row mt-4">
-                            <div class="col-md-8">
-                                <div class="stat-card">
-                                    <h5 class="mb-3">每小时活动分布</h5>
-                                    <div id="hourly-chart" style="height: 300px;"></div>
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background: #f6ffed; color: #52c41a;">
+                                    <i class="bi bi-people"></i>
                                 </div>
+                                <div class="stat-value">${stats.online}</div>
+                                <div class="stat-label">在线员工</div>
+                                <div class="mt-2 small text-muted">总员工: ${stats.employees}</div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="stat-card">
-                                    <h5 class="mb-3">最新活动</h5>
-                                    <div style="max-height: 300px; overflow-y: auto;" id="activity-list">
-                                        ${stats.recent_activities.map(a => `
-                                            <div class="d-flex align-items-center py-2 border-bottom">
-                                                <i class="bi bi-${a.action === 'screenshot' ? 'camera' : 'gear'} me-3"></i>
-                                                <div class="flex-grow-1">
-                                                    <div>${a.employee_id}</div>
-                                                    <small class="text-muted">${a.time}</small>
-                                                </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background: #fff7e6; color: #fa8c16;">
+                                    <i class="bi bi-database"></i>
+                                </div>
+                                <div class="stat-value">${stats.total}</div>
+                                <div class="stat-label">累计截图</div>
+                                <div class="mt-2 small text-muted">${stats.storage_mb} MB</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background: #f9f0ff; color: #722ed1;">
+                                    <i class="bi bi-clock"></i>
+                                </div>
+                                <div class="stat-value">${stats.clients}</div>
+                                <div class="stat-label">客户端数</div>
+                                <div class="mt-2 small text-muted">活跃: ${stats.online}</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mt-4">
+                        <div class="col-md-8">
+                            <div class="stat-card">
+                                <h5 class="mb-3">每小时活动分布</h5>
+                                <div id="hourly-chart" style="height: 300px;"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="stat-card">
+                                <h5 class="mb-3">最新活动</h5>
+                                <div style="max-height: 300px; overflow-y: auto;" id="activity-list">
+                                    ${stats.recent_activities.map(a => `
+                                        <div class="d-flex align-items-center py-2 border-bottom">
+                                            <i class="bi bi-${a.action === 'screenshot' ? 'camera' : 'gear'} me-3"></i>
+                                            <div class="flex-grow-1">
+                                                <div>${a.employee_id}</div>
+                                                <small class="text-muted">${a.time}</small>
                                             </div>
-                                        `).join('')}
-                                    </div>
+                                        </div>
+                                    `).join('')}
                                 </div>
                             </div>
                         </div>
-                    `;
+                    </div>
+                `;
+                
+                // 渲染图表
+                setTimeout(() => {
+                    const options = {
+                        chart: {
+                            type: 'bar',
+                            height: 300,
+                            toolbar: { show: false }
+                        },
+                        series: [{
+                            name: '截图数',
+                            data: stats.hourly
+                        }],
+                        xaxis: {
+                            categories: Array.from({length: 24}, (_, i) => i + '时'),
+                            labels: { rotate: 0 }
+                        },
+                        colors: ['#667eea'],
+                        plotOptions: {
+                            bar: {
+                                borderRadius: 5,
+                                columnWidth: '60%'
+                            }
+                        },
+                        dataLabels: { enabled: false },
+                        grid: { show: false }
+                    };
                     
-                    // 渲染图表
-                    setTimeout(() => {
-                        const options = {
-                            chart: {
-                                type: 'bar',
-                                height: 300,
-                                toolbar: { show: false }
-                            },
-                            series: [{
-                                name: '截图数',
-                                data: stats.hourly
-                            }],
-                            xaxis: {
-                                categories: Array.from({length: 24}, (_, i) => i + '时'),
-                                labels: { rotate: 0 }
-                            },
-                            colors: ['#667eea'],
-                            plotOptions: {
-                                bar: {
-                                    borderRadius: 5,
-                                    columnWidth: '60%'
-                                }
-                            },
-                            dataLabels: { enabled: false },
-                            grid: { show: false }
-                        };
-                        
-                        const chart = new ApexCharts(document.getElementById('hourly-chart'), options);
-                        chart.render();
-                    }, 100);
-                })
-                .catch(error => {
-                    content.innerHTML = '<div class="alert alert-danger">加载失败</div>';
-                });
+                    const chart = new ApexCharts(document.getElementById('hourly-chart'), options);
+                    chart.render();
+                }, 100);
+            } catch (error) {
+                console.error('加载仪表盘失败:', error);
+                content.innerHTML = '<div class="alert alert-danger">加载失败</div>';
+            }
         }
         
         // 自动刷新
-        setInterval(() => {
-            loadDashboard();
+        setInterval(async () => {
+            try {
+                await loadDashboard();
+            } catch (error) {
+                console.error('自动刷新失败:', error);
+            }
         }, 30000);
     </script>
 </body>
