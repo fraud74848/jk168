@@ -562,23 +562,70 @@
             
             checkAuth();
         });
+    
+        // ==================== 通用API请求函数 ====================
+        /**
+         * 通用API请求函数
+         * @param {string} url - API地址
+         * @param {object} options - fetch选项
+         */
+        async function apiRequest(url, options = {}) {
+            const token = localStorage.getItem('token');
+            
+            if (!token) {
+                console.log('未找到token，跳转到登录页');
+                window.location.href = '/login';
+                throw new Error('未登录');
+            }
+            
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                }
+            };
+            
+            const mergedOptions = {
+                ...defaultOptions,
+                ...options,
+                headers: {
+                    ...defaultOptions.headers,
+                    ...(options.headers || {})
+                }
+            };
+            
+            try {
+                const response = await fetch(url, mergedOptions);
+                
+                if (response.status === 401) {
+                    console.log('认证失败（401），跳转到登录页');
+                    localStorage.removeItem('token');
+                    window.location.href = '/login';
+                    throw new Error('未授权');
+                }
+                
+                return response;
+            } catch (error) {
+                console.error('API请求失败:', error);
+                throw error;
+            }
+        }
+        // ==================== 通用API函数添加完毕 ====================
         
         // 检查登录状态
-        function checkAuth() {
-            fetch('/api/auth/check')
-                .then(response => {
-                    if (!response.ok) {
-                        window.location.href = '/login';
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.authenticated) {
-                        document.getElementById('current-user').textContent = data.user;
-                        loadEmployees();
-                        loadStats();
-                    }
-                });
+        async function checkAuth() {
+            try {
+                const response = await apiRequest('/api/auth/check');
+                const data = await response.json();
+                
+                if (data.authenticated) {
+                    document.getElementById('current-user').textContent = data.user;
+                    await loadEmployees();
+                    await loadStats();
+                }
+            } catch (error) {
+                console.error('认证检查失败:', error);
+            }
         }
         
         // 显示提示
@@ -608,33 +655,38 @@
         }
         
         // 加载统计数据
-        function loadStats() {
-            fetch('/api/stats')
-                .then(response => response.json())
-                .then(stats => {
-                    document.getElementById('online-count').textContent = stats.online;
-                    document.getElementById('online-employees').textContent = stats.online;
-                    document.getElementById('today-screenshots').textContent = stats.today;
-                    
-                    const activityRate = stats.employees > 0 
-                        ? Math.round((stats.online / stats.employees) * 100) 
-                        : 0;
-                    document.getElementById('activity-rate').textContent = activityRate + '%';
-                });
+        async function loadStats() {
+            try {
+                const response = await apiRequest('/api/stats');
+                const stats = await response.json();
+                
+                document.getElementById('online-count').textContent = stats.online;
+                document.getElementById('online-employees').textContent = stats.online;
+                document.getElementById('today-screenshots').textContent = stats.today;
+                
+                const activityRate = stats.employees > 0 
+                    ? Math.round((stats.online / stats.employees) * 100) 
+                    : 0;
+                document.getElementById('activity-rate').textContent = activityRate + '%';
+            } catch (error) {
+                console.error('加载统计失败:', error);
+                showToast('加载统计失败', 'danger');
+            }
         }
         
         // 加载员工列表
-        function loadEmployees() {
-            fetch('/api/employees')
-                .then(response => response.json())
-                .then(employees => {
-                    allEmployees = employees;
-                    document.getElementById('total-employees').textContent = employees.length;
-                    filterEmployees();
-                })
-                .catch(error => {
-                    showToast('加载员工列表失败', 'danger');
-                });
+        async function loadEmployees() {
+            try {
+                const response = await apiRequest('/api/employees');
+                const employees = await response.json();
+                
+                allEmployees = employees;
+                document.getElementById('total-employees').textContent = employees.length;
+                filterEmployees();
+            } catch (error) {
+                console.error('加载员工列表失败:', error);
+                showToast('加载员工列表失败', 'danger');
+            }
         }
         
         // 过滤员工
@@ -809,7 +861,6 @@
         
         // 查看员工截图
         function viewEmployee(employeeId) {
-            // 保存到sessionStorage，然后在截图页面自动选中该员工
             sessionStorage.setItem('selectedEmployee', employeeId);
             window.location.href = '/screenshots';
         }
@@ -821,7 +872,7 @@
         }
         
         // 添加员工
-        function addEmployee() {
+        async function addEmployee() {
             const data = {
                 employee_id: document.getElementById('emp-id').value,
                 name: document.getElementById('emp-name').value,
@@ -836,25 +887,24 @@
                 return;
             }
             
-            fetch('/api/employees', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(data)
-            })
-            .then(response => {
+            try {
+                const response = await apiRequest('/api/employees', {
+                    method: 'POST',
+                    body: JSON.stringify(data)
+                });
+                
                 if (response.ok) {
                     showToast('员工添加成功');
                     addModal.hide();
-                    loadEmployees();
+                    await loadEmployees();
                 } else {
-                    showToast('添加失败', 'danger');
+                    const error = await response.json();
+                    showToast(error.error || '添加失败', 'danger');
                 }
-            })
-            .catch(error => {
+            } catch (error) {
+                console.error('添加员工失败:', error);
                 showToast('网络错误', 'danger');
-            });
+            }
         }
         
         // 编辑员工
@@ -875,7 +925,7 @@
         }
         
         // 更新员工
-        function updateEmployee() {
+        async function updateEmployee() {
             const data = {
                 name: document.getElementById('edit-emp-name').value,
                 department: document.getElementById('edit-emp-department').value,
@@ -887,25 +937,24 @@
             
             const employeeId = document.getElementById('edit-emp-id').value;
             
-            fetch(`/api/employees/${employeeId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(data)
-            })
-            .then(response => {
+            try {
+                const response = await apiRequest(`/api/employees/${employeeId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify(data)
+                });
+                
                 if (response.ok) {
                     showToast('员工信息已更新');
                     editModal.hide();
-                    loadEmployees();
+                    await loadEmployees();
                 } else {
-                    showToast('更新失败', 'danger');
+                    const error = await response.json();
+                    showToast(error.error || '更新失败', 'danger');
                 }
-            })
-            .catch(error => {
+            } catch (error) {
+                console.error('更新员工失败:', error);
                 showToast('网络错误', 'danger');
-            });
+            }
         }
         
         // 确认删除
@@ -915,33 +964,38 @@
         }
         
         // 删除员工
-        document.getElementById('confirm-delete').addEventListener('click', function() {
+        document.getElementById('confirm-delete').addEventListener('click', async function() {
             if (!deleteEmployeeId) return;
             
-            fetch(`/api/employees/${deleteEmployeeId}`, {
-                method: 'DELETE'
-            })
-            .then(response => {
+            try {
+                const response = await apiRequest(`/api/employees/${deleteEmployeeId}`, {
+                    method: 'DELETE'
+                });
+                
                 if (response.ok) {
                     showToast('员工已删除');
                     deleteModal.hide();
-                    loadEmployees();
+                    await loadEmployees();
                 } else {
-                    showToast('删除失败', 'danger');
+                    const error = await response.json();
+                    showToast(error.error || '删除失败', 'danger');
                 }
-            })
-            .catch(error => {
+            } catch (error) {
+                console.error('删除员工失败:', error);
                 showToast('网络错误', 'danger');
-            })
-            .finally(() => {
+            } finally {
                 deleteEmployeeId = null;
-            });
+            }
         });
         
         // 自动刷新在线状态
-        setInterval(() => {
-            loadStats();
-            loadEmployees();
+        setInterval(async () => {
+            try {
+                await loadStats();
+                await loadEmployees();
+            } catch (error) {
+                console.error('自动刷新失败:', error);
+            }
         }, 30000);
     </script>
 </body>
