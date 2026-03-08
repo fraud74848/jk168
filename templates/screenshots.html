@@ -473,39 +473,91 @@
         let currentTimeFilter = null;
         let imageModal;
         
+        // ==================== 通用API请求函数 ====================
+        /**
+         * 通用API请求函数
+         * @param {string} url - API地址
+         * @param {object} options - fetch选项
+         */
+        async function apiRequest(url, options = {}) {
+            const token = localStorage.getItem('token');
+            
+            if (!token) {
+                console.log('未找到token，跳转到登录页');
+                window.location.href = '/login';
+                throw new Error('未登录');
+            }
+            
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                }
+            };
+            
+            const mergedOptions = {
+                ...defaultOptions,
+                ...options,
+                headers: {
+                    ...defaultOptions.headers,
+                    ...(options.headers || {})
+                }
+            };
+            
+            try {
+                const response = await fetch(url, mergedOptions);
+                
+                if (response.status === 401) {
+                    console.log('认证失败（401），跳转到登录页');
+                    localStorage.removeItem('token');
+                    window.location.href = '/login';
+                    throw new Error('未授权');
+                }
+                
+                return response;
+            } catch (error) {
+                console.error('API请求失败:', error);
+                throw error;
+            }
+        }
+        // ==================== 通用API函数添加完毕 ====================
+        
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
             imageModal = new bootstrap.Modal(document.getElementById('imageModal'));
             
             // 检查登录状态
-            fetch('/api/auth/check')
-                .then(response => {
-                    if (!response.ok) {
-                        window.location.href = '/login';
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.authenticated) {
-                        document.getElementById('current-user').textContent = data.user;
-                        loadEmployees();
-                        loadStats();
-                        
-                        // 检查是否有从员工页面传来的选中员工
-                        const selectedEmployee = sessionStorage.getItem('selectedEmployee');
-                        if (selectedEmployee) {
-                            sessionStorage.removeItem('selectedEmployee');
-                            setTimeout(() => {
-                                const select = document.getElementById('employee-select');
-                                if (select) {
-                                    select.value = selectedEmployee;
-                                    onEmployeeChange();
-                                }
-                            }, 500);
-                        }
-                    }
-                });
+            checkAuth();
         });
+        
+        // 检查登录状态
+        async function checkAuth() {
+            try {
+                const response = await apiRequest('/api/auth/check');
+                const data = await response.json();
+                
+                if (data.authenticated) {
+                    document.getElementById('current-user').textContent = data.user;
+                    await loadEmployees();
+                    await loadStats();
+                    
+                    // 检查是否有从员工页面传来的选中员工
+                    const selectedEmployee = sessionStorage.getItem('selectedEmployee');
+                    if (selectedEmployee) {
+                        sessionStorage.removeItem('selectedEmployee');
+                        setTimeout(() => {
+                            const select = document.getElementById('employee-select');
+                            if (select) {
+                                select.value = selectedEmployee;
+                                onEmployeeChange();
+                            }
+                        }, 500);
+                    }
+                }
+            } catch (error) {
+                console.error('认证检查失败:', error);
+            }
+        }
         
         // 显示提示
         function showToast(message, type = 'success') {
@@ -534,25 +586,27 @@
         }
         
         // 加载统计数据
-        function loadStats() {
-            fetch('/api/stats')
-                .then(response => response.json())
-                .then(stats => {
-                    document.getElementById('online-count').textContent = stats.online;
-                });
+        async function loadStats() {
+            try {
+                const response = await apiRequest('/api/stats');
+                const stats = await response.json();
+                document.getElementById('online-count').textContent = stats.online;
+            } catch (error) {
+                console.error('加载统计失败:', error);
+            }
         }
         
         // 加载员工列表
-        function loadEmployees() {
-            fetch('/api/employees')
-                .then(response => response.json())
-                .then(data => {
-                    employees = data;
-                    renderEmployeeSelect();
-                })
-                .catch(error => {
-                    showToast('加载员工列表失败', 'danger');
-                });
+        async function loadEmployees() {
+            try {
+                const response = await apiRequest('/api/employees');
+                const data = await response.json();
+                employees = data;
+                renderEmployeeSelect();
+            } catch (error) {
+                console.error('加载员工列表失败:', error);
+                showToast('加载员工列表失败', 'danger');
+            }
         }
         
         // 渲染员工下拉框
@@ -583,11 +637,17 @@
             
             // 加载可用日期
             fetch(`/api/employees/${employeeId}/dates`)
-                .then(response => response.json())
+                .then(response => {
+                    if (response.status === 401) {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    return response.json();
+                })
                 .then(dates => {
-                    if (dates.length === 0) {
+                    if (dates && dates.length === 0) {
                         dateSelect.innerHTML = '<option value="">暂无截图记录</option>';
-                    } else {
+                    } else if (dates) {
                         dateSelect.innerHTML = dates.map(d => 
                             `<option value="${d.date}">${d.date} (${d.count}张)</option>`
                         ).join('');
@@ -596,8 +656,11 @@
                     loadBtn.disabled = false;
                 })
                 .catch(error => {
+                    console.error('加载日期失败:', error);
                     showToast('加载日期失败', 'danger');
                     dateSelect.innerHTML = '<option value="">加载失败</option>';
+                    dateSelect.disabled = false;
+                    loadBtn.disabled = false;
                 });
         }
         
@@ -614,23 +677,39 @@
             const container = document.getElementById('screenshot-container');
             container.innerHTML = '<div class="loading"><div class="loading-spinner"></div><p>加载截图...</p></div>';
             
-            fetch(`/api/screenshots/${employeeId}/${date}`)
-                .then(response => response.json())
+            // 获取token
+            const token = localStorage.getItem('token');
+            
+            fetch(`/api/screenshots/${employeeId}/${date}`, {
+                headers: {
+                    'Authorization': 'Bearer ' + token
+                }
+            })
+                .then(response => {
+                    if (response.status === 401) {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    return response.json();
+                })
                 .then(screenshots => {
-                    currentScreenshots = screenshots;
-                    filteredScreenshots = screenshots;
-                    renderScreenshots();
-                    
-                    // 如果有截图，显示时间线
-                    if (screenshots.length > 0) {
-                        document.getElementById('timeline-container').style.display = 'block';
-                        document.getElementById('time-slider').value = 12;
-                        currentTimeFilter = null;
-                    } else {
-                        document.getElementById('timeline-container').style.display = 'none';
+                    if (screenshots) {
+                        currentScreenshots = screenshots;
+                        filteredScreenshots = screenshots;
+                        renderScreenshots();
+                        
+                        // 如果有截图，显示时间线
+                        if (screenshots.length > 0) {
+                            document.getElementById('timeline-container').style.display = 'block';
+                            document.getElementById('time-slider').value = 12;
+                            currentTimeFilter = null;
+                        } else {
+                            document.getElementById('timeline-container').style.display = 'none';
+                        }
                     }
                 })
                 .catch(error => {
+                    console.error('加载截图失败:', error);
                     container.innerHTML = `
                         <div class="empty-state">
                             <i class="bi bi-exclamation-triangle"></i>
@@ -740,7 +819,13 @@
         }
         
         // 自动刷新在线状态
-        setInterval(loadStats, 30000);
+        setInterval(async () => {
+            try {
+                await loadStats();
+            } catch (error) {
+                console.error('自动刷新失败:', error);
+            }
+        }, 30000);
     </script>
 </body>
 </html>
