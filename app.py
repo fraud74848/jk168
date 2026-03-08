@@ -1088,14 +1088,49 @@ def get_cleanup_status():
 def not_found(e):
     if request.path.startswith('/api/'):
         return jsonify({'error': '资源不存在'}), 404
-    return render_template('404.html'), 404
+    
+    # 尝试渲染模板，如果失败则返回简单HTML
+    try:
+        return render_template('404.html'), 404
+    except:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head><title>404 - 页面不存在</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+            <h1 style="color: #667eea;">404</h1>
+            <h2>页面不存在</h2>
+            <p>您访问的页面不存在或已被移除</p>
+            <a href="/dashboard" style="color: #667eea;">返回仪表盘</a>
+        </body>
+        </html>
+        """, 404
 
 @app.errorhandler(500)
 def internal_error(e):
     db.session.rollback()
     if request.path.startswith('/api/'):
         return jsonify({'error': '服务器内部错误'}), 500
-    return render_template('500.html'), 500
+    
+    # 记录错误详情
+    logger.error(f"500错误: {str(e)}")
+    
+    # 尝试渲染模板，如果失败则返回简单HTML
+    try:
+        return render_template('500.html'), 500
+    except:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head><title>500 - 服务器错误</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+            <h1 style="color: #f5576c;">500</h1>
+            <h2>服务器内部错误</h2>
+            <p>抱歉，服务器处理请求时发生错误</p>
+            <a href="/dashboard" style="color: #667eea;">返回仪表盘</a>
+        </body>
+        </html>
+        """, 500
 
 # ==================== 关闭钩子 ====================
 
