@@ -27,10 +27,13 @@ class Config:
         SQLALCHEMY_DATABASE_URI = PRIMARY_DATABASE_URL.replace('postgres://', 'postgresql://')
     
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_BINDS = {
-        'primary': PRIMARY_DATABASE_URL.replace('postgres://', 'postgresql://') if PRIMARY_DATABASE_URL else None,
-        'backup': BACKUP_DATABASE_URL.replace('postgres://', 'postgresql://') if BACKUP_DATABASE_URL else None
-    }
+    
+    # 修复：只添加有效的数据库绑定
+    SQLALCHEMY_BINDS = {}
+    if PRIMARY_DATABASE_URL:
+        SQLALCHEMY_BINDS['primary'] = PRIMARY_DATABASE_URL.replace('postgres://', 'postgresql://')
+    if BACKUP_DATABASE_URL:
+        SQLALCHEMY_BINDS['backup'] = BACKUP_DATABASE_URL.replace('postgres://', 'postgresql://')
     
     # Aiven SSL配置
     if 'aiven' in PRIMARY_DATABASE_URL.lower():
