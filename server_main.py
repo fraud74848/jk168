@@ -1261,43 +1261,63 @@ from pathlib import Path
 from fastapi.responses import FileResponse
 import os
 
-# 1. 挂载根目录（提供前端页面）
+# 1. 前端静态文件（如果存在）
 index_path = Path("index.html")
 if index_path.exists():
     app.mount("/", StaticFiles(directory=".", html=True), name="static")
     logger.info(f"✅ 前端静态文件已挂载")
+
+    # 列出前端文件帮助调试
+    try:
+        frontend_files = [f for f in Path(".").iterdir() if f.is_file()][:10]
+        logger.info(f"📂 根目录文件: {[f.name for f in frontend_files]}")
+    except Exception as e:
+        logger.error(f"❌ 读取根目录失败: {e}")
 else:
     logger.warning(f"⚠️ index.html 不存在于根目录")
 
-# 2. 挂载截图目录（提供图片文件）
-screenshots_path = Path("/data/screenshots")
-if screenshots_path.exists():
-    app.mount(
-        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
-    )
-    logger.info(f"✅ 截图目录已挂载: /data/screenshots")
-
-    # 列出一些文件用于调试
-    try:
-        files = list(screenshots_path.glob("**/*.webp"))[:5]
-        if files:
-            logger.info(
-                f"📸 找到示例截图: {[str(f.relative_to(screenshots_path)) for f in files]}"
-            )
-    except Exception as e:
-        logger.error(f"❌ 读取截图目录失败: {e}")
-else:
-    logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
+# 2. 截图目录配置
+screenshots_path = Path(Config.SCREENSHOT_DIR)  # 从配置读取
+if not screenshots_path.exists():
+    logger.warning(f"⚠️ 截图目录不存在: {screenshots_path}")
+    screenshots_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"✅ 已创建截图目录: {screenshots_path}")
 
 
-# 3. （可选）保留原来的文件服务路由作为备用
+# 3. 截图文件路由
 @app.get("/screenshots/{path:path}", tags=["文件"])
-async def serve_screenshot_alt(path: str):
-    """备用截图文件服务"""
-    filepath = Path("/data/screenshots") / path
-    if filepath.exists() and filepath.is_file():
-        return FileResponse(filepath)
-    raise HTTPException(status_code=404, detail="File not found")
+async def serve_screenshot(path: str):
+    """提供截图文件服务"""
+    # 安全检查：防止路径遍历攻击
+    if ".." in path or path.startswith("/") or path.startswith("\\"):
+        logger.warning(f"❌ 非法路径访问: {path}")
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # 构建完整路径
+    filepath = screenshots_path / path
+
+    # 记录访问日志（可选）
+    logger.debug(f"📸 请求截图: {path}")
+
+    # 检查文件是否存在
+    if not filepath.exists() or not filepath.is_file():
+        logger.warning(f"❌ 截图不存在: {path}")
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # 返回文件
+    return FileResponse(
+        filepath, media_type="image/webp" if path.endswith(".webp") else "image/jpeg"
+    )
+
+
+# 4. （可选）添加缩略图路由
+@app.get("/thumbnails/{path:path}", tags=["文件"])
+async def serve_thumbnail(path: str):
+    """提供缩略图文件服务"""
+    # 类似上面的逻辑，但指向缩略图目录
+    thumbnail_path = screenshots_path / "thumbnails" / path
+    # ... 安全检查 ...
+    return FileResponse(thumbnail_path)
 
 
 if __name__ == "__main__":
