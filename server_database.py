@@ -13,6 +13,46 @@ from server_config import Config
 
 logger = logging.getLogger(__name__)
 
+# ========== 关键修复：强制转换URL格式 ==========
+def fix_database_url(url):
+    """强制将 postgres:// 转换为 postgresql://"""
+    if url and url.startswith('postgres://'):
+        fixed_url = url.replace('postgres://', 'postgresql://', 1)
+        logger.info(f"✅ 数据库URL已修复: postgres:// -> postgresql://")
+        return fixed_url
+    return url
+
+
+# ========== 添加 SSL 连接配置 ==========
+def get_connect_args():
+    """获取数据库连接参数，支持 Aiven SSL"""
+    connect_args = {}
+    
+    # Aiven 需要 SSL
+    connect_args["sslmode"] = "require"
+    
+    # Render 上有系统证书
+    if os.path.exists('/etc/ssl/certs/ca-certificates.crt'):
+        connect_args["sslrootcert"] = '/etc/ssl/certs/ca-certificates.crt'
+        logger.info("✅ 使用系统CA证书")
+    
+    return connect_args
+
+
+# ========== 使用修复后的URL ==========
+fixed_database_url = fix_database_url(Config.PRIMARY_DATABASE_URL)
+logger.info(f"连接到数据库: {fixed_database_url.split('@')[-1]}")
+
+# 主数据库引擎
+primary_engine = create_engine(
+    fixed_database_url,  # 使用修复后的URL
+    pool_size=Config.DB_POOL_SIZE,
+    max_overflow=Config.DB_MAX_OVERFLOW,
+    pool_pre_ping=True,
+    pool_recycle=Config.DB_POOL_RECYCLE,
+    connect_args=get_connect_args(),
+    echo=Config.DEBUG,
+)
 
 # ========== 添加 SSL 连接配置 ==========
 def get_connect_args():
@@ -141,3 +181,4 @@ def check_database_health():
                 return False, str(e2)
 
         return False, str(e)
+
