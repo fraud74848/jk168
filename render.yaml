@@ -7,54 +7,62 @@ services:
     buildCommand: |
       # 1. 安装 Python 依赖
       pip install -r requirements.txt
+      echo "✅ Python 依赖安装完成"
 
-      # 2. 安装 Node.js（Render Python 环境默认没有 Node.js）
+      # 2. 安装 Node.js
       echo "📦 安装 Node.js..."
       curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
       apt-get install -y nodejs
-      node --version
-      npm --version
+      echo "Node version: $(node --version)"
+      echo "NPM version: $(npm --version)"
       echo "✅ Node.js 安装完成"
 
-      # 3. 构建前端
+      # 3. 查看当前目录文件（调试用）
+      echo "📂 当前目录文件:"
+      ls -la
+
+      # 4. 安装前端依赖
       echo "📦 安装前端依赖..."
       npm install
+      echo "✅ 前端依赖安装完成"
+
+      # 5. 构建前端
       echo "🔨 构建前端..."
       npm run build
       echo "✅ 前端构建完成"
 
-      # 4. 将构建文件复制到应用根目录（和 server_main.py 同一级）
-      echo "📋 复制构建文件到根目录..."
-      # 清理可能存在的旧文件
-      rm -rf assets index.html
-      # 复制新构建的文件到根目录
-      cp -r dist/* .
-      echo "✅ 构建文件已放置在应用根目录"
+      # 6. 检查 dist 目录
+      echo "📂 检查 dist 目录:"
+      if [ -d "dist" ]; then
+        ls -la dist/
+        echo "✅ dist 目录存在"
+        
+        # 7. 复制文件到根目录（同一级！）
+        echo "📋 复制构建文件到根目录（同一级）..."
+        cp -r dist/* .
+        echo "✅ 文件复制完成"
+      else
+        echo "❌ dist 目录不存在！构建失败！"
+        exit 1
+      fi
 
-      # 5. 验证文件是否复制成功
-      echo "📂 根目录文件列表:"
-      ls -la | head -20
-      echo "✅ 构建完成！"
+      # 8. 最终验证
+      echo "📂 根目录最终文件列表:"
+      ls -la | head -30
+      echo "✅ 构建完成！index.html 应该在根目录"
     startCommand: |
       chmod +x entrypoint.sh && ./entrypoint.sh
     envVars:
-      # 数据库配置（在 Render 控制台设置实际值）
       - key: DATABASE_URL
         sync: false
-
-      # 管理员配置
       - key: ADMIN_USERNAME
         value: admin
       - key: ADMIN_PASSWORD
         sync: false
-
-      # JWT 配置
       - key: SECRET_KEY
         generateValue: true
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: 480
-
-      # 存储配置
       - key: SCREENSHOT_DIR
         value: /data/screenshots
       - key: SCREENSHOT_FORMAT
@@ -63,24 +71,16 @@ services:
         value: 80
       - key: SCREENSHOT_INTERVAL
         value: 60
-
-      # 清理配置
       - key: AUTO_CLEANUP_ENABLED
         value: true
       - key: CLEANUP_INTERVAL
         value: 21600
       - key: SCREENSHOT_RETENTION_HOURS
         value: 4
-
-      # Aiven SSL 配置
       - key: CA_CERT_PATH
         value: /etc/ssl/certs/ca-certificates.crt
-
-      # 调试配置
       - key: DEBUG
         value: false
-
-    # 磁盘存储（用于截图）
     disk:
       name: screenshots
       mountPath: /data
