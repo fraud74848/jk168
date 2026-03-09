@@ -612,7 +612,9 @@ def create_employee(
     return db_employee
 
 
-@app.put("/api/employees/{employee_id}", response_model=schemas.Employee, tags=["员工"])
+@app.put(
+    "/api/employees/{employee_id:path}", response_model=schemas.Employee, tags=["员工"]
+)
 def update_employee(
     employee_id: str,
     employee_update: schemas.EmployeeUpdate,
@@ -639,7 +641,7 @@ def update_employee(
     return db_employee
 
 
-@app.delete("/api/employees/{employee_id}", tags=["员工"])
+@app.delete("/api/employees/{employee_id:path}", tags=["员工"])
 def delete_employee(
     employee_id: str,
     db: Session = Depends(get_db),
@@ -675,7 +677,7 @@ def delete_employee(
     return {"message": "员工已删除"}
 
 
-@app.get("/api/employees/{employee_id}/dates", tags=["员工"])
+@app.get("/api/employees/{employee_id:path}/dates", tags=["员工"])
 def get_employee_dates(
     employee_id: str,
     db: Session = Depends(get_db),
