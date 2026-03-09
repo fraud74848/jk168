@@ -275,18 +275,23 @@ const previewTitle = computed(() => {
 });
 
 // 获取图片URL
-// 获取图片URL
 const getImageUrl = (path) => {
   if (!path) return "";
   if (path.startsWith("http")) return path;
+
+  // 处理Windows路径分隔符
   const cleanPath = path.replace(/\\/g, "/");
 
-  // 使用环境变量或当前域名
-  const baseUrl = import.meta.env.VITE_API_BASE_URL
-    ? import.meta.env.VITE_API_BASE_URL.replace("/api", "")
-    : window.location.origin;
+  // 使用当前域名（Render上会自动是 https://jk168.onrender.com）
+  const baseUrl = window.location.origin;
 
-  return `${baseUrl}${cleanPath}`;
+  // 如果路径已经以 /screenshots 开头，直接拼接
+  if (cleanPath.startsWith("/screenshots/")) {
+    return `${baseUrl}${cleanPath}`;
+  }
+
+  // 否则添加 /screenshots 前缀
+  return `${baseUrl}/screenshots${cleanPath.startsWith("/") ? "" : "/"}${cleanPath}`;
 };
 // 加载员工列表
 const loadEmployees = async () => {
