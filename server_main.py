@@ -562,6 +562,7 @@ async def upload_batch(
 
 
 # ==================== 员工管理接口 ====================
+# ==================== 员工管理接口 ====================
 
 
 @app.get("/api/employees", response_model=List[schemas.Employee], tags=["员工"])
@@ -584,7 +585,10 @@ def get_employees(
     return employees
 
 
-@app.get("/api/employees/{employee_id}", response_model=schemas.Employee, tags=["员工"])
+# ⚠️ 修改这里：添加 :path
+@app.get(
+    "/api/employees/{employee_id:path}", response_model=schemas.Employee, tags=["员工"]
+)
 def get_employee(
     employee_id: str,
     db: Session = Depends(get_db),
@@ -628,6 +632,7 @@ def create_employee(
     return db_employee
 
 
+# ✅ 正确（已有 :path）
 @app.put(
     "/api/employees/{employee_id:path}", response_model=schemas.Employee, tags=["员工"]
 )
@@ -657,6 +662,7 @@ def update_employee(
     return db_employee
 
 
+# ✅ 正确（已有 :path）
 @app.delete("/api/employees/{employee_id:path}", tags=["员工"])
 def delete_employee(
     employee_id: str,
@@ -693,6 +699,7 @@ def delete_employee(
     return {"message": "员工已删除"}
 
 
+# ✅ 正确（已有 :path）
 @app.get("/api/employees/{employee_id:path}/dates", tags=["员工"])
 def get_employee_dates(
     employee_id: str,
