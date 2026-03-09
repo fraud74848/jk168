@@ -1178,25 +1178,26 @@ def process_batch_upload(
 # ==================== 静态文件服务 ====================
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+from fastapi.responses import FileResponse
 
-# 检查是否有静态文件目录
-static_dir = Path("static")
-if static_dir.exists() and static_dir.is_dir():
-    # 挂载静态文件，提供Vue应用
-    app.mount("/", StaticFiles(directory="static", html=True), name="static")
-    logger.info(f"✅ 静态文件已挂载，访问 http://localhost:8000 查看管理界面")
-
-    # 确保根路径返回index.html
+# 检查根目录是否有 index.html（构建后的文件）
+index_path = Path("index.html")
+if index_path.exists():
+    # 直接挂载当前目录作为静态文件服务
+    app.mount("/", StaticFiles(directory=".", html=True), name="static")
+    logger.info(f"✅ 静态文件已挂载，访问根路径查看管理界面")
+    
+    # 确保根路径正确返回 index.html（备用）
     @app.get("/")
     async def serve_frontend():
-        from fastapi.responses import FileResponse
-
-        return FileResponse(static_dir / "index.html")
-
+        return FileResponse("index.html")
 else:
     logger.warning(
-        f"⚠️ 静态目录不存在: {static_dir.absolute()}，请先运行 build.sh 构建前端"
+        f"⚠️ index.html 不存在于根目录: {index_path.absolute()}，请检查构建过程"
     )
+    # 列出当前目录文件帮助调试
+    import os
+    logger.warning(f"当前目录文件: {os.listdir('.')}")
 
 
 if __name__ == "__main__":
