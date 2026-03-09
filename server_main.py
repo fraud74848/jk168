@@ -1168,28 +1168,6 @@ def get_cleanup_status(
     }
 
 
-# ==================== 文件服务 ====================
-
-
-@app.get("/screenshots/{path:path}", tags=["文件"])
-def serve_screenshot(path: str):
-    """提供截图文件（公开访问）"""
-    # 安全检查：防止路径遍历攻击
-    if ".." in path or path.startswith("/"):
-        raise HTTPException(status_code=404)
-
-    # 如果 path 为空，返回 404
-    if not path or path.strip() == "":
-        raise HTTPException(status_code=404, detail="File not specified")
-
-    filepath = STORAGE_PATH / path
-
-    # 检查文件是否存在且是文件（不是目录）
-    if not filepath.exists() or not filepath.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-
-    return FileResponse(filepath)
-
 
 # ==================== 工具函数 ====================
 
