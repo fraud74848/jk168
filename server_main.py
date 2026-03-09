@@ -53,6 +53,22 @@ from server_config import Config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+BEIJING_TZ = pytz.timezone("Asia/Shanghai")
+UTC_TZ = pytz.UTC
+
+
+def utc_to_beijing(utc_dt):
+    """将UTC时间转换为北京时间"""
+    if not utc_dt:
+        return None
+    # 如果时间是naive（无时区），先设为UTC
+    if utc_dt.tzinfo is None:
+        utc_dt = UTC_TZ.localize(utc_dt)
+    # 转换为北京时间
+    beijing_dt = utc_dt.astimezone(BEIJING_TZ)
+    return beijing_dt
+
+
 # 创建数据库表
 models.Base.metadata.create_all(bind=engine)
 
@@ -702,8 +718,6 @@ def get_employee_dates(
 
 
 # ==================== 截图接口 ====================
-
-
 @app.get("/api/screenshots", response_model=List[schemas.Screenshot], tags=["截图"])
 def get_screenshots(
     employee_id: Optional[str] = None,
@@ -734,6 +748,13 @@ def get_screenshots(
         .all()
     )
 
+    # 🔴 新增：转换时间为北京时间
+    for s in screenshots:
+        if s.screenshot_time:
+            s.screenshot_time = utc_to_beijing(s.screenshot_time)
+        if s.uploaded_at:
+            s.uploaded_at = utc_to_beijing(s.uploaded_at)
+
     return screenshots
 
 
@@ -750,6 +771,7 @@ def get_screenshots_by_date(
 ):
     """获取员工指定日期的截图"""
     try:
+        # 🔴 注意：这里查询时仍然用UTC时间
         start = datetime.strptime(date, "%Y-%m-%d")
         end = start + timedelta(days=1)
     except:
@@ -765,6 +787,13 @@ def get_screenshots_by_date(
         .order_by(models.Screenshot.screenshot_time.desc())
         .all()
     )
+
+    # 🔴 新增：转换时间为北京时间
+    for s in screenshots:
+        if s.screenshot_time:
+            s.screenshot_time = utc_to_beijing(s.screenshot_time)
+        if s.uploaded_at:
+            s.uploaded_at = utc_to_beijing(s.uploaded_at)
 
     return screenshots
 
@@ -784,6 +813,13 @@ def get_recent_screenshots(
         .limit(limit)
         .all()
     )
+
+    # 🔴 新增：转换时间为北京时间
+    for s in screenshots:
+        if s.screenshot_time:
+            s.screenshot_time = utc_to_beijing(s.screenshot_time)
+        if s.uploaded_at:
+            s.uploaded_at = utc_to_beijing(s.uploaded_at)
 
     return screenshots
 
@@ -857,44 +893,57 @@ def delete_client(
 
 
 # ==================== 统计接口 ====================
-
-
 @app.get("/api/stats", tags=["统计"])
 def get_stats(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """获取系统统计信息"""
-    now = datetime.utcnow()
-    today = now.date()
-    week_ago = now - timedelta(days=7)
+    """获取系统统计信息（北京时间）"""
+    # 获取当前UTC时间
+    now_utc = datetime.utcnow()
 
-    # 今日截图
+    # 转换为北京时间用于显示
+    now_beijing = utc_to_beijing(now_utc)
+    today_beijing = now_beijing.date()
+
+    # 用于数据库查询的UTC时间范围
+    today_start_utc = datetime(now_utc.year, now_utc.month, now_utc.day)
+    yesterday_start_utc = today_start_utc - timedelta(days=1)
+    week_ago_utc = now_utc - timedelta(days=7)
+
+    # 在线客户端判断（使用UTC）
+    cutoff_utc = now_utc - timedelta(minutes=10)
+
+    # 今日截图（基于北京时间）
     today_count = (
         db.query(models.Screenshot)
-        .filter(func.date(models.Screenshot.screenshot_time) == today)
+        .filter(
+            models.Screenshot.screenshot_time >= today_start_utc,
+            models.Screenshot.screenshot_time < today_start_utc + timedelta(days=1),
+        )
         .count()
     )
 
-    # 昨日截图
-    yesterday = today - timedelta(days=1)
+    # 昨日截图（基于北京时间）
     yesterday_count = (
         db.query(models.Screenshot)
-        .filter(func.date(models.Screenshot.screenshot_time) == yesterday)
+        .filter(
+            models.Screenshot.screenshot_time >= yesterday_start_utc,
+            models.Screenshot.screenshot_time < yesterday_start_utc + timedelta(days=1),
+        )
         .count()
     )
 
-    # 本周截图
+    # 本周截图（基于UTC，7天）
     week_count = (
         db.query(models.Screenshot)
-        .filter(models.Screenshot.screenshot_time >= week_ago)
+        .filter(models.Screenshot.screenshot_time >= week_ago_utc)
         .count()
     )
 
     # 在线客户端
-    cutoff = now - timedelta(minutes=10)
     online_clients = (
-        db.query(models.Client).filter(models.Client.last_seen >= cutoff).count()
+        db.query(models.Client).filter(models.Client.last_seen >= cutoff_utc).count()
     )
 
     # 总数
@@ -917,22 +966,30 @@ def get_stats(
         .count()
     )
 
-    # 每小时活动
+    # 每小时活动（基于UTC，但返回给前端时已转换为北京时间）
     hourly = []
-    for i in range(24):
-        start = now.replace(hour=i, minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=1)
-        count = (
-            db.query(models.Screenshot)
-            .filter(
-                models.Screenshot.screenshot_time >= start,
-                models.Screenshot.screenshot_time < end,
-            )
-            .count()
-        )
-        hourly.append(count)
+    beijing_hourly = [0] * 24  # 初始化24个0
 
-    # 最近活动
+    # 查询今天的所有截图
+    today_screenshots = (
+        db.query(models.Screenshot)
+        .filter(
+            models.Screenshot.screenshot_time >= today_start_utc,
+            models.Screenshot.screenshot_time < today_start_utc + timedelta(days=1),
+        )
+        .all()
+    )
+
+    # 按北京时间的小时统计
+    for s in today_screenshots:
+        if s.screenshot_time:
+            beijing_time = utc_to_beijing(s.screenshot_time)
+            hour = beijing_time.hour
+            beijing_hourly[hour] = beijing_hourly.get(hour, 0) + 1
+
+    hourly = beijing_hourly
+
+    # 最近活动（转换为北京时间）
     recent_activities = (
         db.query(models.Activity)
         .order_by(models.Activity.created_at.desc())
@@ -940,7 +997,20 @@ def get_stats(
         .all()
     )
 
-    # 各员工截图统计
+    recent_activities_list = []
+    for a in recent_activities:
+        beijing_time = utc_to_beijing(a.created_at)
+        recent_activities_list.append(
+            {
+                "employee_id": a.employee_id,
+                "action": a.action,
+                "time": (
+                    beijing_time.strftime("%Y-%m-%d %H:%M:%S") if beijing_time else None
+                ),
+            }
+        )
+
+    # 各员工截图统计（基于北京时间）
     top_employees = []
     employees = db.query(models.Employee).limit(5).all()
     for emp in employees:
@@ -948,7 +1018,8 @@ def get_stats(
             db.query(models.Screenshot)
             .filter(
                 models.Screenshot.employee_id == emp.employee_id,
-                func.date(models.Screenshot.screenshot_time) == today,
+                models.Screenshot.screenshot_time >= today_start_utc,
+                models.Screenshot.screenshot_time < today_start_utc + timedelta(days=1),
             )
             .count()
         )
@@ -982,15 +1053,8 @@ def get_stats(
             "jpg": jpg_count,
             "other": total_screenshots - webp_count - jpg_count,
         },
-        "hourly": hourly,
-        "recent_activities": [
-            {
-                "employee_id": a.employee_id,
-                "action": a.action,
-                "time": a.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            for a in recent_activities
-        ],
+        "hourly": hourly,  # 现在是北京时间的每小时分布
+        "recent_activities": recent_activities_list,  # 北京时间
         "top_employees": top_employees,
         "auto_cleanup": {
             "enabled": Config.AUTO_CLEANUP_ENABLED,
@@ -1014,14 +1078,21 @@ def get_activities(
         .all()
     )
 
-    return [
-        {
-            "employee_id": a.employee_id,
-            "action": a.action,
-            "time": a.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        for a in activities
-    ]
+    # 🔴 转换时间为北京时间
+    result = []
+    for a in activities:
+        beijing_time = utc_to_beijing(a.created_at)
+        result.append(
+            {
+                "employee_id": a.employee_id,
+                "action": a.action,
+                "time": (
+                    beijing_time.strftime("%Y-%m-%d %H:%M:%S") if beijing_time else None
+                ),
+            }
+        )
+
+    return result
 
 
 # ==================== 清理接口 ====================
