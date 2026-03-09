@@ -1179,25 +1179,45 @@ def process_batch_upload(
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from fastapi.responses import FileResponse
+import os
 
-# 检查根目录是否有 index.html（构建后的文件）
+# 1. 挂载根目录（提供前端页面）
 index_path = Path("index.html")
 if index_path.exists():
-    # 直接挂载当前目录作为静态文件服务
     app.mount("/", StaticFiles(directory=".", html=True), name="static")
-    logger.info(f"✅ 静态文件已挂载，访问根路径查看管理界面")
-    
-    # 确保根路径正确返回 index.html（备用）
-    @app.get("/")
-    async def serve_frontend():
-        return FileResponse("index.html")
+    logger.info(f"✅ 前端静态文件已挂载")
 else:
-    logger.warning(
-        f"⚠️ index.html 不存在于根目录: {index_path.absolute()}，请检查构建过程"
+    logger.warning(f"⚠️ index.html 不存在于根目录")
+
+# 2. 挂载截图目录（提供图片文件）
+screenshots_path = Path("/data/screenshots")
+if screenshots_path.exists():
+    app.mount(
+        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
     )
-    # 列出当前目录文件帮助调试
-    import os
-    logger.warning(f"当前目录文件: {os.listdir('.')}")
+    logger.info(f"✅ 截图目录已挂载: /data/screenshots")
+
+    # 列出一些文件用于调试
+    try:
+        files = list(screenshots_path.glob("**/*.webp"))[:5]
+        if files:
+            logger.info(
+                f"📸 找到示例截图: {[str(f.relative_to(screenshots_path)) for f in files]}"
+            )
+    except Exception as e:
+        logger.error(f"❌ 读取截图目录失败: {e}")
+else:
+    logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
+
+
+# 3. （可选）保留原来的文件服务路由作为备用
+@app.get("/screenshots/{path:path}", tags=["文件"])
+async def serve_screenshot_alt(path: str):
+    """备用截图文件服务"""
+    filepath = Path("/data/screenshots") / path
+    if filepath.exists() and filepath.is_file():
+        return FileResponse(filepath)
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 if __name__ == "__main__":
