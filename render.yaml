@@ -1,12 +1,20 @@
 services:
   - type: web
-    name: employee-monitor # 改成一个服务名
+    name: employee-monitor
     runtime: python
     region: singapore
     plan: free
     buildCommand: |
       # 1. 安装 Python 依赖
       pip install -r requirements.txt
+
+      # 1.5 安装 Node.js（关键步骤！）
+      echo "📦 安装 Node.js..."
+      curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+      apt-get install -y nodejs
+      node --version
+      npm --version
+      echo "✅ Node.js 安装完成"
 
       # 2. 构建前端
       echo "📦 安装前端依赖..."
@@ -26,13 +34,13 @@ services:
     envVars:
       # 数据库配置（在 Render 控制台设置实际值）
       - key: DATABASE_URL
-        sync: false # 部署后在 Dashboard 设置
+        sync: false
 
       # 管理员配置
       - key: ADMIN_USERNAME
         value: admin
       - key: ADMIN_PASSWORD
-        sync: false # 部署后在 Dashboard 设置
+        sync: false
 
       # JWT 配置
       - key: SECRET_KEY
@@ -65,8 +73,6 @@ services:
       # 调试配置
       - key: DEBUG
         value: false
-
-      # 前端 API 地址（使用相对路径，不需要设置）
 
     # 磁盘存储（用于截图）
     disk:
