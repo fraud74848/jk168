@@ -1,0 +1,58 @@
+services:
+  # ========== FastAPI 后端服务 ==========
+  - type: web
+    name: employee-monitor-api
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: |
+      pip install -r server_requirements.txt
+    startCommand: |
+      gunicorn -w 4 -k uvicorn.workers.UvicornWorker server_main:app
+    envVars:
+      - key: DATABASE_URL
+        value: postgresql://avnadmin:YOUR_PASSWORD@your-project.aivencloud.com:12345/defaultdb?sslmode=require
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        value: your-secure-password
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 480
+      - key: SCREENSHOT_DIR
+        value: /data/screenshots
+      - key: SCREENSHOT_FORMAT
+        value: webp
+      - key: SCREENSHOT_QUALITY
+        value: 80
+      - key: SCREENSHOT_INTERVAL
+        value: 60
+      - key: AUTO_CLEANUP_ENABLED
+        value: true
+      - key: CLEANUP_INTERVAL
+        value: 21600
+      - key: SCREENSHOT_RETENTION_HOURS
+        value: 4
+      - key: CA_CERT_PATH
+        value: /etc/ssl/certs/ca-certificates.crt
+      - key: DEBUG
+        value: false
+    disk:
+      name: screenshots
+      mountPath: /data
+      sizeGB: 5
+
+  # ========== Vue 前端服务 ==========
+  - type: web
+    name: employee-monitor-admin
+    runtime: static
+    region: singapore
+    buildCommand: |
+      cd admin
+      npm install
+      npm run build
+    staticPublishPath: ./admin/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://employee-monitor-api.onrender.com/api
