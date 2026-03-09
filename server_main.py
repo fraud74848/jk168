@@ -55,6 +55,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+UTC_TZ = ZoneInfo("UTC")
+
+
 def utc_to_beijing(utc_dt):
     """将UTC时间转换为北京时间"""
     if not utc_dt:
@@ -67,8 +71,6 @@ def utc_to_beijing(utc_dt):
     return beijing_dt
 
 
-BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-UTC_TZ = ZoneInfo("UTC")
 
 
 # 创建数据库表
