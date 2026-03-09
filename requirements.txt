@@ -12,5 +12,5 @@ gunicorn==21.2.0
 redis==5.0.1          
 alembic==1.12.1       
 werkzeug==3.0.1     
-pytz==2024.1 
+
 
