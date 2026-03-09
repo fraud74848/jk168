@@ -4,7 +4,8 @@ import router from "./admin_router";
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api", // 确保有完整的地址
+  // 修改这里：使用相对路径，不再需要环境变量
+  baseURL: "/api",
   timeout: 30000,
 });
 

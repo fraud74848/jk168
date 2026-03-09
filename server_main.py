@@ -1175,6 +1175,30 @@ def process_batch_upload(
         logger.error(f"批量处理失败: {e}")
 
 
+# ==================== 静态文件服务 ====================
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+# 检查是否有静态文件目录
+static_dir = Path("static")
+if static_dir.exists() and static_dir.is_dir():
+    # 挂载静态文件，提供Vue应用
+    app.mount("/", StaticFiles(directory="static", html=True), name="static")
+    logger.info(f"✅ 静态文件已挂载，访问 http://localhost:8000 查看管理界面")
+
+    # 确保根路径返回index.html
+    @app.get("/")
+    async def serve_frontend():
+        from fastapi.responses import FileResponse
+
+        return FileResponse(static_dir / "index.html")
+
+else:
+    logger.warning(
+        f"⚠️ 静态目录不存在: {static_dir.absolute()}，请先运行 build.sh 构建前端"
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
 
