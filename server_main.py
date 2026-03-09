@@ -48,13 +48,11 @@ from server_auth import (
 )
 from server_cleanup import DataCleanup
 from server_config import Config
+from zoneinfo import ZoneInfo
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-BEIJING_TZ = pytz.timezone("Asia/Shanghai")
-UTC_TZ = pytz.UTC
 
 
 def utc_to_beijing(utc_dt):
@@ -63,10 +61,14 @@ def utc_to_beijing(utc_dt):
         return None
     # 如果时间是naive（无时区），先设为UTC
     if utc_dt.tzinfo is None:
-        utc_dt = UTC_TZ.localize(utc_dt)
+        utc_dt = utc_dt.replace(tzinfo=UTC_TZ)
     # 转换为北京时间
     beijing_dt = utc_dt.astimezone(BEIJING_TZ)
     return beijing_dt
+
+
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+UTC_TZ = ZoneInfo("UTC")
 
 
 # 创建数据库表
