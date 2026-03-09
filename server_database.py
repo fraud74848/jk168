@@ -13,39 +13,63 @@ from server_config import Config
 
 logger = logging.getLogger(__name__)
 
+
 # ========== 关键修复：强制转换URL格式 ==========
 def fix_database_url(url):
     """强制将 postgres:// 转换为 postgresql://"""
-    if url and url.startswith('postgres://'):
+    if not url:
+        return url
+    
+    # 打印原始URL（隐藏密码）
+    safe_url = url
+    if '@' in url:
+        parts = url.split('@')
+        auth_part = parts[0].split(':')
+        if len(auth_part) > 2:
+            safe_url = f"{auth_part[0]}:****@{parts[1]}"
+    logger.info(f"原始URL: {safe_url}")
+    
+    # 强制转换
+    if url.startswith('postgres://'):
         fixed_url = url.replace('postgres://', 'postgresql://', 1)
         logger.info(f"✅ 数据库URL已修复: postgres:// -> postgresql://")
         return fixed_url
+    
     return url
 
 
-# ========== 添加 SSL 连接配置 ==========
+# ========== SSL 连接配置 ==========
 def get_connect_args():
     """获取数据库连接参数，支持 Aiven SSL"""
     connect_args = {}
     
-    # Aiven 需要 SSL
-    connect_args["sslmode"] = "require"
+    # 获取数据库URL（使用修复后的）
+    db_url = Config.PRIMARY_DATABASE_URL or ""
     
-    # Render 上有系统证书
-    if os.path.exists('/etc/ssl/certs/ca-certificates.crt'):
-        connect_args["sslrootcert"] = '/etc/ssl/certs/ca-certificates.crt'
-        logger.info("✅ 使用系统CA证书")
-    
+    # 检查是否需要 SSL
+    if "sslmode=require" in db_url or "aiven" in db_url.lower():
+        connect_args["sslmode"] = "require"
+        logger.info("✅ 启用 SSL 连接")
+
+        # 优先使用系统证书（Render环境）
+        if os.path.exists('/etc/ssl/certs/ca-certificates.crt'):
+            connect_args["sslrootcert"] = '/etc/ssl/certs/ca-certificates.crt'
+            logger.info("✅ 使用系统CA证书")
+        # 其次使用自定义证书
+        elif os.path.exists(Config.CA_CERT_PATH):
+            connect_args["sslrootcert"] = Config.CA_CERT_PATH
+            logger.info(f"使用自定义CA证书: {Config.CA_CERT_PATH}")
+
     return connect_args
 
 
-# ========== 使用修复后的URL ==========
-fixed_database_url = fix_database_url(Config.PRIMARY_DATABASE_URL)
-logger.info(f"连接到数据库: {fixed_database_url.split('@')[-1]}")
+# ========== 修复主数据库URL ==========
+fixed_primary_url = fix_database_url(Config.PRIMARY_DATABASE_URL)
+logger.info(f"连接到主数据库: {fixed_primary_url.split('@')[-1] if '@' in fixed_primary_url else fixed_primary_url}")
 
 # 主数据库引擎
 primary_engine = create_engine(
-    fixed_database_url,  # 使用修复后的URL
+    fixed_primary_url,  # 使用修复后的URL
     pool_size=Config.DB_POOL_SIZE,
     max_overflow=Config.DB_MAX_OVERFLOW,
     pool_pre_ping=True,
@@ -54,54 +78,26 @@ primary_engine = create_engine(
     echo=Config.DEBUG,
 )
 
-# ========== 添加 SSL 连接配置 ==========
-def get_connect_args():
-    """获取数据库连接参数，支持 Aiven SSL"""
-    connect_args = {}
-
-    # 检查是否需要 SSL（Aiven 需要）
-    if (
-        "aiven" in Config.PRIMARY_DATABASE_URL.lower()
-        or "sslmode" in Config.PRIMARY_DATABASE_URL
-    ):
-        connect_args["sslmode"] = "require"
-
-        # 如果有 CA 证书文件
-        if os.path.exists(Config.CA_CERT_PATH):
-            connect_args["sslrootcert"] = Config.CA_CERT_PATH
-            logger.info(f"使用 CA 证书: {Config.CA_CERT_PATH}")
-
-    return connect_args
-
-
-# 主数据库引擎 - 添加 connect_args
-primary_engine = create_engine(
-    Config.PRIMARY_DATABASE_URL,
-    pool_size=Config.DB_POOL_SIZE,
-    max_overflow=Config.DB_MAX_OVERFLOW,
-    pool_pre_ping=True,
-    pool_recycle=Config.DB_POOL_RECYCLE,
-    connect_args=get_connect_args(),  # 添加这行
-    echo=Config.DEBUG,
-)
-
 # 主数据库会话
 PrimarySessionLocal = sessionmaker(
     autocommit=False, autoflush=False, bind=primary_engine
 )
 
-# 备用数据库引擎（如果配置了）
+# ========== 备用数据库（如果配置了）==========
 backup_engine = None
 BackupSessionLocal = None
 
 if Config.BACKUP_DATABASE_URL:
+    fixed_backup_url = fix_database_url(Config.BACKUP_DATABASE_URL)
+    logger.info(f"连接到备用数据库: {fixed_backup_url.split('@')[-1] if '@' in fixed_backup_url else fixed_backup_url}")
+    
     backup_engine = create_engine(
-        Config.BACKUP_DATABASE_URL,
+        fixed_backup_url,
         pool_size=Config.DB_POOL_SIZE,
         max_overflow=Config.DB_MAX_OVERFLOW,
         pool_pre_ping=True,
         pool_recycle=Config.DB_POOL_RECYCLE,
-        connect_args=get_connect_args(),  # 添加这行
+        connect_args=get_connect_args(),
         echo=Config.DEBUG,
     )
     BackupSessionLocal = sessionmaker(
@@ -113,7 +109,7 @@ Base = declarative_base()
 # 导出 engine 变量
 engine = primary_engine
 
-# 定义 __all__ 列表，明确指定可以导入的内容
+# 定义 __all__ 列表
 __all__ = [
     "Base",
     "engine",
@@ -181,4 +177,3 @@ def check_database_health():
                 return False, str(e2)
 
         return False, str(e)
-
