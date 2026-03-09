@@ -15,6 +15,8 @@ class Config:
     if not PRIMARY_DATABASE_URL:
         raise ValueError("生产环境必须设置 DATABASE_URL 环境变量")
 
+    BACKUP_DATABASE_URL = os.environ.get("BACKUP_DATABASE_URL")
+
     # Aiven SSL 配置
     CA_CERT_PATH = os.environ.get("CA_CERT_PATH", "./ca.pem")
 
