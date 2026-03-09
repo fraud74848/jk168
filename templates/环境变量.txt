@@ -1,7 +1,0 @@
-PYTHON_VERSION = 3.9.18
-FLASK_ENV = production
-SECRET_KEY = [生成随机字符串]
-ADMIN_USERNAME = admin
-ADMIN_PASSWORD = [设置你的密码]
-SCREENSHOT_DIR = /var/data/screenshots
-SCREENSHOT_RETENTION_DAYS = 30
