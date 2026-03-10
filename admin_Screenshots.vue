@@ -131,7 +131,7 @@
               <span>{{ formatTime(item.screenshot_time) }}</span>
             </div>
             <div class="info-row">
-              <el-icon><Computer /></el-icon>
+              <el-icon><Monitor /></el-icon>
               <span>{{ item.computer_name || "未知" }}</span>
             </div>
           </div>
@@ -616,4 +616,3 @@ onMounted(() => {
   border-radius: 8px;
 }
 </style>
-
