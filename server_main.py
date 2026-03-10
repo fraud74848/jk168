@@ -725,6 +725,7 @@ def get_employee_dates(
 
 
 # ==================== 截图接口 ====================
+# server_main.py
 
 
 @app.get("/api/screenshots", response_model=List[schemas.Screenshot], tags=["截图"])
@@ -739,7 +740,13 @@ def get_screenshots(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取截图列表"""
-    query = db.query(models.Screenshot)
+    # ===== 修改：使用 join 一次性加载员工信息 =====
+    query = db.query(
+        models.Screenshot, models.Employee.name.label("employee_name")
+    ).outerjoin(
+        models.Employee, models.Screenshot.employee_id == models.Employee.employee_id
+    )
+    # ==========================================
 
     if employee_id:
         query = query.filter(models.Screenshot.employee_id == employee_id)
@@ -750,12 +757,20 @@ def get_screenshots(
     if end_date:
         query = query.filter(models.Screenshot.screenshot_time <= end_date)
 
-    screenshots = (
+    # ===== 执行查询并组装结果 =====
+    results = (
         query.order_by(models.Screenshot.screenshot_time.desc())
         .offset(skip)
         .limit(limit)
         .all()
     )
+
+    screenshots = []
+    for screenshot, employee_name in results:
+        screenshot_dict = screenshot.to_dict()
+        screenshot_dict["employee_name"] = employee_name
+        screenshots.append(screenshot_dict)
+    # ============================
 
     return screenshots
 
@@ -778,8 +793,12 @@ def get_screenshots_by_date(
     except:
         raise HTTPException(status_code=400, detail="日期格式错误")
 
-    screenshots = (
-        db.query(models.Screenshot)
+    results = (
+        db.query(models.Screenshot, models.Employee.name.label("employee_name"))
+        .outerjoin(
+            models.Employee,
+            models.Screenshot.employee_id == models.Employee.employee_id,
+        )
         .filter(
             models.Screenshot.employee_id == employee_id,
             models.Screenshot.screenshot_time >= start,
@@ -788,6 +807,14 @@ def get_screenshots_by_date(
         .order_by(models.Screenshot.screenshot_time.desc())
         .all()
     )
+
+    # ===== 组装结果 =====
+    screenshots = []
+    for screenshot, employee_name in results:
+        screenshot_dict = screenshot.to_dict()
+        screenshot_dict["employee_name"] = employee_name
+        screenshots.append(screenshot_dict)
+    # ==================
 
     return screenshots
 
@@ -801,12 +828,26 @@ def get_recent_screenshots(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取最近的截图"""
-    screenshots = (
-        db.query(models.Screenshot)
+    # ===== 修改：使用 join 一次性加载员工信息 =====
+    results = (
+        db.query(models.Screenshot, models.Employee.name.label("employee_name"))
+        .outerjoin(
+            models.Employee,
+            models.Screenshot.employee_id == models.Employee.employee_id,
+        )
         .order_by(models.Screenshot.screenshot_time.desc())
         .limit(limit)
         .all()
     )
+    # ==========================================
+
+    # ===== 组装结果 =====
+    screenshots = []
+    for screenshot, employee_name in results:
+        screenshot_dict = screenshot.to_dict()
+        screenshot_dict["employee_name"] = employee_name
+        screenshots.append(screenshot_dict)
+    # ==================
 
     return screenshots
 

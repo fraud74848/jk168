@@ -162,6 +162,7 @@ class Screenshot(ScreenshotBase):
     date: Optional[str] = None
     datetime: Optional[str] = None
     size_str: Optional[str] = None
+    employee_name: Optional[str] = None
 
     class Config:
         from_attributes = True
