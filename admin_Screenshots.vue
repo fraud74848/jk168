@@ -14,6 +14,7 @@
             <el-option
               v-for="(emp, idx) in employees"
               :key="emp?.id || `emp-${idx}`"
+              <!-- ===== 修改：显示员工姓名和ID ===== -->
               :label="emp?.name ? `${emp.name} (${emp.id})` : '加载中...'"
               :value="emp?.id || ''"
             />
@@ -122,7 +123,7 @@
           <div class="screenshot-info">
             <div class="info-row">
               <el-icon><User /></el-icon>
-              <!-- ===== 修改：显示员工管理中设置的姓名 ===== -->
+              <!-- ===== 修改：显示员工姓名（name字段）===== -->
               <span class="employee-name" :title="`ID: ${item.employee_id}`">
                 {{ getEmployeeName(item.employee_id) }}
               </span>
@@ -172,8 +173,8 @@
 
         <div class="preview-info">
           <el-descriptions :column="2" border>
+            <!-- ===== 修改：预览对话框显示员工姓名 ===== -->
             <el-descriptions-item label="员工姓名">
-              <!-- ===== 修改：预览对话框显示员工管理中设置的姓名 ===== -->
               <div>
                 <strong>{{ getEmployeeName(currentPreview?.employee_id) }}</strong>
                 <span style="color: #999; margin-left: 8px; font-size: 12px;">
@@ -244,7 +245,7 @@ const formatFileSize = formatFileSizeUtil;
 const route = useRoute();
 const loading = ref(false);
 const employees = ref([]);
-// ===== 员工ID到姓名的映射表（从员工管理加载）=====
+// ===== 员工ID到姓名的映射表（存储name字段）=====
 const employeeNameMap = ref(new Map());
 // =============================================
 
@@ -278,17 +279,17 @@ const previewTitle = computed(() => {
   return `截图预览 - ${employeeName} - ${currentPreview.value.datetime}`;
 });
 
-// ===== 获取员工姓名（从员工管理的映射表中获取）=====
+// ===== 获取员工姓名（从映射表中获取name字段）=====
 const getEmployeeName = (employeeId) => {
   if (!employeeId) return "未知员工";
   
-  // 从映射表中获取员工管理中设置的姓名
+  // 从映射表中获取员工姓名（name字段）
   const name = employeeNameMap.value.get(employeeId);
   
-  // 如果找到姓名，返回姓名；否则返回ID（表示未在员工管理中设置）
+  // 如果找到姓名，返回姓名；否则返回ID（表示未设置姓名）
   return name || employeeId;
 };
-// ===============================================
+// ==============================================
 
 // 获取图片URL
 const getImageUrl = (path) => {
@@ -311,7 +312,7 @@ const loadEmployees = async () => {
     const data = await employeeApi.getEmployees();
     employees.value = Array.isArray(data) ? data : [];
     
-    // 建立员工ID到姓名的映射（使用员工管理中设置的name字段）
+    // 建立员工ID到姓名的映射（使用name字段）
     employeeNameMap.value.clear();
     employees.value.forEach(emp => {
       if (emp.id && emp.name) {
@@ -321,6 +322,10 @@ const loadEmployees = async () => {
     });
     
     console.log("员工映射表已建立，共", employeeNameMap.value.size, "条记录");
+    console.log("映射表示例:", {
+      "OS-20250627BVSF\\Administrator": employeeNameMap.value.get("OS-20250627BVSF\\Administrator"),
+      "OS-20250218QMGZ\\Administrator": employeeNameMap.value.get("OS-20250218QMGZ\\Administrator")
+    });
   } catch (error) {
     console.error("加载员工列表失败:", error);
     employees.value = [];
@@ -346,7 +351,7 @@ const loadScreenshots = async () => {
     const data = await screenshotApi.getScreenshots(params);
     screenshots.value = Array.isArray(data) ? data : [];
     
-    // 调试信息：查看第一个截图的数据
+    // 调试信息：查看映射是否正确
     if (screenshots.value.length > 0) {
       console.log("截图数据示例:", {
         employee_id: screenshots.value[0].employee_id,
