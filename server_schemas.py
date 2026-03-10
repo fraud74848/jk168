@@ -155,8 +155,8 @@ class Screenshot(ScreenshotBase):
     id: int
     thumbnail: Optional[str] = None
     storage_url: Optional[str] = None
-    uploaded_at: datetime
-    screenshot_time: datetime
+    uploaded_at: None
+    screenshot_time: None
     url: Optional[str] = None
     time: Optional[str] = None
     date: Optional[str] = None
