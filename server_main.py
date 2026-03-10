@@ -891,8 +891,7 @@ def get_screenshots_by_date(
         screenshot = {
             "id": row_dict.get("id"),
             "employee_id": row_dict.get("employee_id"),
-            "employee_name": row_dict.get("employee_name")
-            or row_dict.get("employee_id"),
+            "name": row_dict.get("name") or row_dict.get("employee_id"),
             "client_id": row_dict.get("client_id"),
             "filename": row_dict.get("filename"),
             "thumbnail": row_dict.get("thumbnail"),
