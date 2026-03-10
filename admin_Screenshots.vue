@@ -287,7 +287,12 @@ const previewTitle = computed(() => {
 const getEmployeeName = (item) => {
   if (!item || !item.employee_id) return "未知员工";
 
-  // 优先使用映射表中的姓名
+  // 1. 优先使用后端返回的 employee_name（最准确）
+  if (item.employee_name) {
+    return item.employee_name;
+  }
+
+  // 2. 其次使用映射表中的姓名（兼容旧数据）
   const name = employeeNameMap.value.get(item.employee_id);
   return name || item.employee_id;
 };
@@ -335,8 +340,6 @@ const loadEmployees = async () => {
   }
 };
 // =============================
-
-// 加载截图
 const loadScreenshots = async () => {
   loading.value = true;
   try {
@@ -354,12 +357,16 @@ const loadScreenshots = async () => {
     const data = await screenshotApi.getScreenshots(params);
     screenshots.value = Array.isArray(data) ? data : [];
 
-    // 调试信息，查看映射是否正确
+    // 更详细的调试信息
     if (screenshots.value.length > 0) {
-      console.log("截图数据示例:", {
-        employee_id: screenshots.value[0].employee_id,
-        display_name: getEmployeeName(screenshots.value[0]),
-      });
+      const first = screenshots.value[0];
+      console.log("第一条完整数据:", first); // ← 查看完整数据
+      console.log("employee_name字段:", first.employee_name); // ← 检查这个字段
+      console.log(
+        "employeeNameMap中是否有此员工:",
+        employeeNameMap.value.get(first.employee_id),
+      );
+      console.log("getEmployeeName返回值:", getEmployeeName(first));
     }
 
     applyTimeFilter();

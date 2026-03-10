@@ -167,7 +167,7 @@ class Screenshot(ScreenshotBase):
     size_str: Optional[str] = None
     format: Optional[str] = None
     encrypted: Optional[bool] = None
-    employee_name: Optional[str] = None
+    name: Optional[str] = None
 
     class Config:
         from_attributes = True

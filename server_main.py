@@ -763,7 +763,7 @@ def get_screenshots(
     sql = """
         SELECT 
             s.*,
-            e.name as employee_name
+            e.name as name
         FROM screenshots s
         LEFT JOIN employees e ON s.employee_id = e.employee_id
         WHERE 1=1
