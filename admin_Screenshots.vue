@@ -14,7 +14,6 @@
             <el-option
               v-for="(emp, idx) in employees"
               :key="emp?.id || `emp-${idx}`"
-              <!-- ===== 修改：显示员工姓名和ID ===== -->
               :label="emp?.name ? `${emp.name} (${emp.id})` : '加载中...'"
               :value="emp?.id || ''"
             />
@@ -123,9 +122,8 @@
           <div class="screenshot-info">
             <div class="info-row">
               <el-icon><User /></el-icon>
-              <!-- ===== 修改：显示员工姓名（name字段）===== -->
               <span class="employee-name" :title="`ID: ${item.employee_id}`">
-                {{ getEmployeeName(item.employee_id) }}
+                {{ getEmployeeName(item) }}
               </span>
             </div>
             <div class="info-row">
@@ -173,20 +171,19 @@
 
         <div class="preview-info">
           <el-descriptions :column="2" border>
-            <!-- ===== 修改：预览对话框显示员工姓名 ===== -->
             <el-descriptions-item label="员工姓名">
               <div>
-                <strong>{{ getEmployeeName(currentPreview?.employee_id) }}</strong>
-                <span style="color: #999; margin-left: 8px; font-size: 12px;">
+                <strong>{{ getEmployeeName(currentPreview) }}</strong>
+                <span style="color: #999; margin-left: 8px; font-size: 12px">
                   ID: {{ currentPreview?.employee_id }}
                 </span>
               </div>
             </el-descriptions-item>
-            <el-descriptions-item label="时间">
-              {{ formatFullDateTime(currentPreview?.screenshot_time) }}
-            </el-descriptions-item>
             <el-descriptions-item label="计算机">
               {{ currentPreview?.computer_name || "未知" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="时间">
+              {{ formatFullDateTime(currentPreview?.screenshot_time) }}
             </el-descriptions-item>
             <el-descriptions-item label="用户">
               {{ currentPreview?.windows_user || "未知" }}
@@ -218,12 +215,15 @@
 </template>
 
 <script setup>
+// ===== 导入统一的时间工具 =====
 import {
   formatTime,
   formatFullDateTime,
   formatFileSize as formatFileSizeUtil,
   getHour,
 } from "./admin_timezone";
+// ============================
+
 import { ref, computed, onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
@@ -240,14 +240,16 @@ import {
 } from "@element-plus/icons-vue";
 import { screenshotApi, employeeApi } from "./admin_api";
 
+// ===== 使用统一的文件大小格式化函数 =====
 const formatFileSize = formatFileSizeUtil;
+// ====================================
 
 const route = useRoute();
 const loading = ref(false);
 const employees = ref([]);
-// ===== 员工ID到姓名的映射表（存储name字段）=====
+// ===== 创建员工姓名映射表 =====
 const employeeNameMap = ref(new Map());
-// =============================================
+// ============================
 
 const screenshots = ref([]);
 const filteredScreenshots = ref([]);
@@ -258,6 +260,7 @@ const previewVisible = ref(false);
 const previewFullscreen = ref(false);
 const currentPreview = ref(null);
 
+// 确保所有过滤器都有默认值
 const filters = ref({
   employeeId: "",
   dateRange: [],
@@ -273,65 +276,65 @@ const timeMarks = {
   23: "23:00",
 };
 
+// ===== 预览标题使用员工姓名 =====
 const previewTitle = computed(() => {
   if (!currentPreview.value) return "";
-  const employeeName = getEmployeeName(currentPreview.value.employee_id);
+  const employeeName = getEmployeeName(currentPreview.value);
   return `截图预览 - ${employeeName} - ${currentPreview.value.datetime}`;
 });
 
-// ===== 获取员工姓名（从映射表中获取name字段）=====
-const getEmployeeName = (employeeId) => {
-  if (!employeeId) return "未知员工";
-  
-  // 从映射表中获取员工姓名（name字段）
-  const name = employeeNameMap.value.get(employeeId);
-  
-  // 如果找到姓名，返回姓名；否则返回ID（表示未设置姓名）
-  return name || employeeId;
+// ===== 获取员工姓名的函数 =====
+const getEmployeeName = (item) => {
+  if (!item || !item.employee_id) return "未知员工";
+
+  // 优先使用映射表中的姓名
+  const name = employeeNameMap.value.get(item.employee_id);
+  return name || item.employee_id;
 };
-// ==============================================
+// ============================
 
 // 获取图片URL
 const getImageUrl = (path) => {
   if (!path) return "";
   if (path.startsWith("http")) return path;
 
+  // 处理Windows路径分隔符
   const cleanPath = path.replace(/\\/g, "/");
+
+  // 使用当前域名
   const baseUrl = window.location.origin;
 
+  // 如果路径已经以 /screenshots 开头，直接拼接
   if (cleanPath.startsWith("/screenshots/")) {
     return `${baseUrl}${cleanPath}`;
   }
 
+  // 否则添加 /screenshots 前缀
   return `${baseUrl}/screenshots${cleanPath.startsWith("/") ? "" : "/"}${cleanPath}`;
 };
 
-// ===== 加载员工列表并建立ID到姓名的映射 =====
+// ===== 加载员工列表并建立映射 =====
 const loadEmployees = async () => {
   try {
     const data = await employeeApi.getEmployees();
     employees.value = Array.isArray(data) ? data : [];
-    
-    // 建立员工ID到姓名的映射（使用name字段）
+
+    // 建立员工ID到姓名的映射
     employeeNameMap.value.clear();
-    employees.value.forEach(emp => {
+    employees.value.forEach((emp) => {
       if (emp.id && emp.name) {
         employeeNameMap.value.set(emp.id, emp.name);
         console.log(`员工映射: ${emp.id} -> ${emp.name}`);
       }
     });
-    
+
     console.log("员工映射表已建立，共", employeeNameMap.value.size, "条记录");
-    console.log("映射表示例:", {
-      "OS-20250627BVSF\\Administrator": employeeNameMap.value.get("OS-20250627BVSF\\Administrator"),
-      "OS-20250218QMGZ\\Administrator": employeeNameMap.value.get("OS-20250218QMGZ\\Administrator")
-    });
   } catch (error) {
     console.error("加载员工列表失败:", error);
     employees.value = [];
   }
 };
-// ==========================================
+// =============================
 
 // 加载截图
 const loadScreenshots = async () => {
@@ -350,15 +353,15 @@ const loadScreenshots = async () => {
 
     const data = await screenshotApi.getScreenshots(params);
     screenshots.value = Array.isArray(data) ? data : [];
-    
-    // 调试信息：查看映射是否正确
+
+    // 调试信息，查看映射是否正确
     if (screenshots.value.length > 0) {
       console.log("截图数据示例:", {
         employee_id: screenshots.value[0].employee_id,
-        display_name: getEmployeeName(screenshots.value[0].employee_id)
+        display_name: getEmployeeName(screenshots.value[0]),
       });
     }
-    
+
     applyTimeFilter();
   } catch (error) {
     console.error("加载截图失败:", error);
@@ -369,6 +372,7 @@ const loadScreenshots = async () => {
   }
 };
 
+// ===== 时间筛选使用统一工具获取小时 =====
 const filterByTime = () => {
   if (!screenshots.value || screenshots.value.length === 0) {
     filteredScreenshots.value = [];
@@ -380,21 +384,26 @@ const filterByTime = () => {
   } else {
     filteredScreenshots.value = screenshots.value.filter((s) => {
       if (!s.screenshot_time) return false;
+      // 使用统一工具获取正确的小时
       const hour = getHour(s.screenshot_time);
       return hour === timeFilter.value;
     });
   }
   currentPage.value = 1;
 };
+// =================================
 
+// 应用时间筛选
 const applyTimeFilter = () => {
   filterByTime();
 };
 
+// 处理筛选变化
 const handleFilterChange = () => {
   loadScreenshots();
 };
 
+// 重置筛选
 const resetFilters = () => {
   filters.value = {
     employeeId: "",
@@ -406,15 +415,18 @@ const resetFilters = () => {
   loadScreenshots();
 };
 
+// 分页处理
 const handlePageChange = () => {
   // 分页逻辑由el-pagination自动处理
 };
 
+// 预览图片
 const previewImage = (item) => {
   currentPreview.value = item;
   previewVisible.value = true;
 };
 
+// 下载图片
 const downloadImage = () => {
   if (!currentPreview.value) return;
 
@@ -566,7 +578,7 @@ onMounted(() => {
 /* 员工姓名样式 */
 .employee-name {
   font-weight: 500;
-  color: #409EFF;
+  color: #409eff;
   cursor: help;
   max-width: 120px;
   overflow: hidden;

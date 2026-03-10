@@ -742,6 +742,7 @@ def delete_employee(
 
 
 # ==================== 截图接口 ====================
+# ==================== 截图接口 ====================
 
 
 @app.get("/api/screenshots", response_model=List[schemas.Screenshot], tags=["截图"])
@@ -756,23 +757,90 @@ def get_screenshots(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取截图列表"""
-    query = db.query(models.Screenshot)
+    from sqlalchemy import text
+
+    # 使用原生SQL查询，直接连表获取员工姓名
+    sql = """
+        SELECT 
+            s.*,
+            e.name as employee_name
+        FROM screenshots s
+        LEFT JOIN employees e ON s.employee_id = e.employee_id
+        WHERE 1=1
+    """
+    params = {}
 
     if employee_id:
-        query = query.filter(models.Screenshot.employee_id == employee_id)
-    if client_id:
-        query = query.filter(models.Screenshot.client_id == client_id)
-    if start_date:
-        query = query.filter(models.Screenshot.screenshot_time >= start_date)
-    if end_date:
-        query = query.filter(models.Screenshot.screenshot_time <= end_date)
+        sql += " AND s.employee_id = :employee_id"
+        params["employee_id"] = employee_id
 
-    screenshots = (
-        query.order_by(models.Screenshot.screenshot_time.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    if client_id:
+        sql += " AND s.client_id = :client_id"
+        params["client_id"] = client_id
+
+    if start_date:
+        sql += " AND s.screenshot_time >= :start_date"
+        params["start_date"] = start_date
+
+    if end_date:
+        sql += " AND s.screenshot_time <= :end_date"
+        params["end_date"] = end_date
+
+    sql += " ORDER BY s.screenshot_time DESC"
+    sql += " OFFSET :skip LIMIT :limit"
+    params["skip"] = skip
+    params["limit"] = limit
+
+    # 执行查询
+    result = db.execute(text(sql), params).fetchall()
+
+    # 转换为字典列表
+    screenshots = []
+    for row in result:
+        # 将Row对象转换为字典
+        row_dict = dict(row._mapping)
+
+        # 构建返回数据
+        screenshot = {
+            "id": row_dict.get("id"),
+            "employee_id": row_dict.get("employee_id"),
+            "employee_name": row_dict.get("employee_name")
+            or row_dict.get("employee_id"),  # 如果没有姓名，显示ID
+            "client_id": row_dict.get("client_id"),
+            "filename": row_dict.get("filename"),
+            "thumbnail": row_dict.get("thumbnail"),
+            "file_size": row_dict.get("file_size"),
+            "width": row_dict.get("width"),
+            "height": row_dict.get("height"),
+            "storage_url": row_dict.get("storage_url"),
+            "uploaded_at": row_dict.get("uploaded_at"),
+            "screenshot_time": row_dict.get("screenshot_time"),
+            "computer_name": row_dict.get("computer_name"),
+            "windows_user": row_dict.get("windows_user"),
+            "image_format": row_dict.get("image_format"),
+            "is_encrypted": row_dict.get("is_encrypted"),
+            # 添加格式化后的字段
+            "url": row_dict.get("storage_url"),
+            "time": (
+                row_dict.get("screenshot_time").strftime("%H:%M:%S")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "date": (
+                row_dict.get("screenshot_time").strftime("%Y-%m-%d")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "datetime": (
+                row_dict.get("screenshot_time").strftime("%Y-%m-%d %H:%M:%S")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "size_str": format_size(row_dict.get("file_size")),
+            "format": row_dict.get("image_format"),
+            "encrypted": row_dict.get("is_encrypted"),
+        }
+        screenshots.append(screenshot)
 
     return screenshots
 
@@ -789,22 +857,76 @@ def get_screenshots_by_date(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取员工指定日期的截图"""
+    from sqlalchemy import text
+
     try:
         start = datetime.strptime(date, "%Y-%m-%d")
         end = start + timedelta(days=1)
     except:
         raise HTTPException(status_code=400, detail="日期格式错误")
 
-    screenshots = (
-        db.query(models.Screenshot)
-        .filter(
-            models.Screenshot.employee_id == employee_id,
-            models.Screenshot.screenshot_time >= start,
-            models.Screenshot.screenshot_time < end,
-        )
-        .order_by(models.Screenshot.screenshot_time.desc())
-        .all()
-    )
+    # 使用原生SQL查询，直接连表获取员工姓名
+    sql = """
+        SELECT 
+            s.*,
+            e.name as employee_name
+        FROM screenshots s
+        LEFT JOIN employees e ON s.employee_id = e.employee_id
+        WHERE s.employee_id = :employee_id
+            AND s.screenshot_time >= :start_date
+            AND s.screenshot_time < :end_date
+        ORDER BY s.screenshot_time DESC
+    """
+
+    params = {"employee_id": employee_id, "start_date": start, "end_date": end}
+
+    # 执行查询
+    result = db.execute(text(sql), params).fetchall()
+
+    # 转换为字典列表
+    screenshots = []
+    for row in result:
+        row_dict = dict(row._mapping)
+
+        screenshot = {
+            "id": row_dict.get("id"),
+            "employee_id": row_dict.get("employee_id"),
+            "employee_name": row_dict.get("employee_name")
+            or row_dict.get("employee_id"),
+            "client_id": row_dict.get("client_id"),
+            "filename": row_dict.get("filename"),
+            "thumbnail": row_dict.get("thumbnail"),
+            "file_size": row_dict.get("file_size"),
+            "width": row_dict.get("width"),
+            "height": row_dict.get("height"),
+            "storage_url": row_dict.get("storage_url"),
+            "uploaded_at": row_dict.get("uploaded_at"),
+            "screenshot_time": row_dict.get("screenshot_time"),
+            "computer_name": row_dict.get("computer_name"),
+            "windows_user": row_dict.get("windows_user"),
+            "image_format": row_dict.get("image_format"),
+            "is_encrypted": row_dict.get("is_encrypted"),
+            "url": row_dict.get("storage_url"),
+            "time": (
+                row_dict.get("screenshot_time").strftime("%H:%M:%S")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "date": (
+                row_dict.get("screenshot_time").strftime("%Y-%m-%d")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "datetime": (
+                row_dict.get("screenshot_time").strftime("%Y-%m-%d %H:%M:%S")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "size_str": format_size(row_dict.get("file_size")),
+            "format": row_dict.get("image_format"),
+            "encrypted": row_dict.get("is_encrypted"),
+        }
+        screenshots.append(screenshot)
 
     return screenshots
 
@@ -818,14 +940,81 @@ def get_recent_screenshots(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取最近的截图"""
-    screenshots = (
-        db.query(models.Screenshot)
-        .order_by(models.Screenshot.screenshot_time.desc())
-        .limit(limit)
-        .all()
-    )
+    from sqlalchemy import text
+
+    sql = """
+        SELECT 
+            s.*,
+            e.name as employee_name
+        FROM screenshots s
+        LEFT JOIN employees e ON s.employee_id = e.employee_id
+        ORDER BY s.screenshot_time DESC
+        LIMIT :limit
+    """
+
+    params = {"limit": limit}
+
+    # 执行查询
+    result = db.execute(text(sql), params).fetchall()
+
+    # 转换为字典列表
+    screenshots = []
+    for row in result:
+        row_dict = dict(row._mapping)
+
+        screenshot = {
+            "id": row_dict.get("id"),
+            "employee_id": row_dict.get("employee_id"),
+            "employee_name": row_dict.get("employee_name")
+            or row_dict.get("employee_id"),
+            "client_id": row_dict.get("client_id"),
+            "filename": row_dict.get("filename"),
+            "thumbnail": row_dict.get("thumbnail"),
+            "file_size": row_dict.get("file_size"),
+            "width": row_dict.get("width"),
+            "height": row_dict.get("height"),
+            "storage_url": row_dict.get("storage_url"),
+            "uploaded_at": row_dict.get("uploaded_at"),
+            "screenshot_time": row_dict.get("screenshot_time"),
+            "computer_name": row_dict.get("computer_name"),
+            "windows_user": row_dict.get("windows_user"),
+            "image_format": row_dict.get("image_format"),
+            "is_encrypted": row_dict.get("is_encrypted"),
+            "url": row_dict.get("storage_url"),
+            "time": (
+                row_dict.get("screenshot_time").strftime("%H:%M:%S")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "date": (
+                row_dict.get("screenshot_time").strftime("%Y-%m-%d")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "datetime": (
+                row_dict.get("screenshot_time").strftime("%Y-%m-%d %H:%M:%S")
+                if row_dict.get("screenshot_time")
+                else None
+            ),
+            "size_str": format_size(row_dict.get("file_size")),
+            "format": row_dict.get("image_format"),
+            "encrypted": row_dict.get("is_encrypted"),
+        }
+        screenshots.append(screenshot)
 
     return screenshots
+
+
+# ===== 辅助函数：格式化文件大小 =====
+def format_size(size):
+    """格式化文件大小"""
+    if not size:
+        return "0 B"
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size/1024:.1f} KB"
+    return f"{size/(1024*1024):.1f} MB"
 
 
 # ==================== 客户端管理接口 ====================

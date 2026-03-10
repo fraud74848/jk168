@@ -151,6 +151,9 @@ class ScreenshotCreate(ScreenshotBase):
     screenshot_time: Optional[datetime] = None
 
 
+# server_schemas.py
+
+
 class Screenshot(ScreenshotBase):
     id: int
     thumbnail: Optional[str] = None
@@ -162,6 +165,9 @@ class Screenshot(ScreenshotBase):
     date: Optional[str] = None
     datetime: Optional[str] = None
     size_str: Optional[str] = None
+    format: Optional[str] = None
+    encrypted: Optional[bool] = None
+    employee_name: Optional[str] = None
 
     class Config:
         from_attributes = True
