@@ -804,7 +804,7 @@ def get_screenshots(
         screenshot = {
             "id": row_dict.get("id"),
             "employee_id": row_dict.get("employee_id"),
-            "employee_name": row_dict.get("employee_name")
+            "name": row_dict.get("name")
             or row_dict.get("employee_id"),  # 如果没有姓名，显示ID
             "client_id": row_dict.get("client_id"),
             "filename": row_dict.get("filename"),
@@ -869,7 +869,7 @@ def get_screenshots_by_date(
     sql = """
         SELECT 
             s.*,
-            e.name as employee_name
+            e.name as name
         FROM screenshots s
         LEFT JOIN employees e ON s.employee_id = e.employee_id
         WHERE s.employee_id = :employee_id
@@ -944,7 +944,7 @@ def get_recent_screenshots(
     sql = """
         SELECT 
             s.*,
-            e.name as employee_name
+            e.name as name
         FROM screenshots s
         LEFT JOIN employees e ON s.employee_id = e.employee_id
         ORDER BY s.screenshot_time DESC
@@ -964,8 +964,7 @@ def get_recent_screenshots(
         screenshot = {
             "id": row_dict.get("id"),
             "employee_id": row_dict.get("employee_id"),
-            "employee_name": row_dict.get("employee_name")
-            or row_dict.get("employee_id"),
+            "name": row_dict.get("name") or row_dict.get("employee_id"),
             "client_id": row_dict.get("client_id"),
             "filename": row_dict.get("filename"),
             "thumbnail": row_dict.get("thumbnail"),
