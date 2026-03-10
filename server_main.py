@@ -593,9 +593,40 @@ def get_employees(
     return employees
 
 
-@app.get("/api/employees/{employee_id}", response_model=schemas.Employee, tags=["员工"])
-def get_employee(
+# ===== 修改点1：日期路由必须放在最前面，使用 path 参数 =====
+@app.get("/api/employees/{employee_id:path}/dates", tags=["员工"])
+def get_employee_dates(
     employee_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """获取员工有截图的所有日期"""
+    screenshots = (
+        db.query(models.Screenshot)
+        .filter(models.Screenshot.employee_id == employee_id)
+        .all()
+    )
+
+    dates = {}
+    for s in screenshots:
+        date = s.screenshot_time.strftime("%Y-%m-%d")
+        dates[date] = dates.get(date, 0) + 1
+
+    result = [
+        {"date": d, "count": dates[d]} for d in sorted(dates.keys(), reverse=True)
+    ]
+    return result
+
+
+# ====================================================
+
+
+# ===== 修改点2：获取单个员工，使用 path 参数 =====
+@app.get(
+    "/api/employees/{employee_id:path}", response_model=schemas.Employee, tags=["员工"]
+)
+def get_employee(
+    employee_id: str,  # 这里会捕获完整的 "OS-20250218QMGZ\Administrator"
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
@@ -610,6 +641,9 @@ def get_employee(
         raise HTTPException(status_code=404, detail="员工不存在")
 
     return employee
+
+
+# ==============================================
 
 
 @app.post("/api/employees", response_model=schemas.Employee, tags=["员工"])
@@ -637,9 +671,12 @@ def create_employee(
     return db_employee
 
 
-@app.put("/api/employees/{employee_id}", response_model=schemas.Employee, tags=["员工"])
+# ===== 修改点3：更新员工（你已经改好了） =====
+@app.put(
+    "/api/employees/{employee_id:path}", response_model=schemas.Employee, tags=["员工"]
+)
 def update_employee(
-    employee_id: str,
+    employee_id: str,  # 这里会捕获完整的 "OS-20250218QMGZ\Administrator"
     employee_update: schemas.EmployeeUpdate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
@@ -647,7 +684,7 @@ def update_employee(
     """更新员工信息"""
     db_employee = (
         db.query(models.Employee)
-        .filter(models.Employee.employee_id == employee_id)
+        .filter(models.Employee.employee_id == employee_id)  # 直接用完整ID查询
         .first()
     )
 
@@ -664,9 +701,13 @@ def update_employee(
     return db_employee
 
 
-@app.delete("/api/employees/{employee_id}", tags=["员工"])
+# ==========================================
+
+
+# ===== 修改点4：删除员工，使用 path 参数 =====
+@app.delete("/api/employees/{employee_id:path}", tags=["员工"])
 def delete_employee(
-    employee_id: str,
+    employee_id: str,  # 这里会捕获完整的 "OS-20250218QMGZ\Administrator"
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
@@ -698,30 +739,6 @@ def delete_employee(
 
     logger.info(f"员工删除: {employee_id}")
     return {"message": "员工已删除"}
-
-
-@app.get("/api/employees/{employee_id}/dates", tags=["员工"])
-def get_employee_dates(
-    employee_id: str,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
-):
-    """获取员工有截图的所有日期"""
-    screenshots = (
-        db.query(models.Screenshot)
-        .filter(models.Screenshot.employee_id == employee_id)
-        .all()
-    )
-
-    dates = {}
-    for s in screenshots:
-        date = s.screenshot_time.strftime("%Y-%m-%d")
-        dates[date] = dates.get(date, 0) + 1
-
-    result = [
-        {"date": d, "count": dates[d]} for d in sorted(dates.keys(), reverse=True)
-    ]
-    return result
 
 
 # ==================== 截图接口 ====================
@@ -1129,17 +1146,18 @@ def get_cleanup_status(
 
 # ==================== 文件服务 ====================
 
+
 @app.get("/screenshots/{path:path}", tags=["文件"])
 async def serve_screenshot(path: str):
     """提供截图文件（公开访问）"""
-    
+
     if not path or path.strip() == "":
         raise HTTPException(status_code=404, detail="File not specified")
 
     try:
         # 统一路径分隔符
         path = path.replace("\\", "/")
-        
+
         # 主存储路径
         base_path = STORAGE_PATH.resolve()
         file_path = (base_path / path).resolve()
