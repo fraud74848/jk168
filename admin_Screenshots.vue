@@ -122,15 +122,16 @@
           <div class="screenshot-info">
             <div class="info-row">
               <el-icon><Clock /></el-icon>
+              <!-- ===== 修改：使用统一的时间格式化函数 ===== -->
               <span>{{ formatTime(item.screenshot_time) }}</span>
             </div>
             <div class="info-row">
               <el-icon><User /></el-icon>
-              <!-- ===== 修改：同时显示员工姓名和ID ===== -->
-              <span>{{ formatEmployeeName(item) }}</span>
+              <span>{{ item.computer_name || "未知" }}</span>
             </div>
             <div class="info-row">
               <el-icon><Document /></el-icon>
+              <!-- ===== 修改：使用统一的文件大小格式化函数 ===== -->
               <span>{{ formatFileSize(item.file_size) }}</span>
             </div>
           </div>
@@ -170,9 +171,8 @@
 
         <div class="preview-info">
           <el-descriptions :column="2" border>
-            <!-- 修改后 -->
             <el-descriptions-item label="员工">{{
-              formatEmployeeName(currentPreview)
+              currentPreview?.employee_id
             }}</el-descriptions-item>
             <!-- ===== 修改：使用统一的完整时间格式化函数 ===== -->
             <el-descriptions-item label="时间">{{
@@ -220,14 +220,6 @@ import {
   formatFileSize as formatFileSizeUtil,
   getHour,
 } from "./admin_timezone";
-
-const formatEmployeeName = (item) => {
-  if (!item) return "未知";
-  if (item.employee_name) {
-    return `${item.employee_name} (${item.employee_id})`;
-  }
-  return item.employee_id;
-};
 // ============================
 
 import { ref, computed, onMounted, watch } from "vue";

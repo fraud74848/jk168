@@ -253,10 +253,6 @@ class Screenshot(Base):
             "time": self.screenshot_time.strftime("%H:%M:%S"),
             "date": self.screenshot_time.strftime("%Y-%m-%d"),
             "datetime": self.screenshot_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "uploaded_at": self.uploaded_at.isoformat() if self.uploaded_at else None,
-            "screenshot_time": (
-                self.screenshot_time.isoformat() if self.screenshot_time else None
-            ),
             "computer_name": self.computer_name,
             "windows_user": self.windows_user,
             "format": self.image_format,

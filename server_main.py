@@ -725,7 +725,6 @@ def get_employee_dates(
 
 
 # ==================== 截图接口 ====================
-# server_main.py
 
 
 @app.get("/api/screenshots", response_model=List[schemas.Screenshot], tags=["截图"])
@@ -740,13 +739,7 @@ def get_screenshots(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取截图列表"""
-    # ===== 修改：使用 join 一次性加载员工信息 =====
-    query = db.query(
-        models.Screenshot, models.Employee.name.label("employee_name")
-    ).outerjoin(
-        models.Employee, models.Screenshot.employee_id == models.Employee.employee_id
-    )
-    # ==========================================
+    query = db.query(models.Screenshot)
 
     if employee_id:
         query = query.filter(models.Screenshot.employee_id == employee_id)
@@ -757,20 +750,12 @@ def get_screenshots(
     if end_date:
         query = query.filter(models.Screenshot.screenshot_time <= end_date)
 
-    # ===== 执行查询并组装结果 =====
-    results = (
+    screenshots = (
         query.order_by(models.Screenshot.screenshot_time.desc())
         .offset(skip)
         .limit(limit)
         .all()
     )
-
-    screenshots = []
-    for screenshot, employee_name in results:
-        screenshot_dict = screenshot.to_dict()
-        screenshot_dict["employee_name"] = employee_name
-        screenshots.append(screenshot_dict)
-    # ============================
 
     return screenshots
 
@@ -793,12 +778,8 @@ def get_screenshots_by_date(
     except:
         raise HTTPException(status_code=400, detail="日期格式错误")
 
-    results = (
-        db.query(models.Screenshot, models.Employee.name.label("employee_name"))
-        .outerjoin(
-            models.Employee,
-            models.Screenshot.employee_id == models.Employee.employee_id,
-        )
+    screenshots = (
+        db.query(models.Screenshot)
         .filter(
             models.Screenshot.employee_id == employee_id,
             models.Screenshot.screenshot_time >= start,
@@ -807,14 +788,6 @@ def get_screenshots_by_date(
         .order_by(models.Screenshot.screenshot_time.desc())
         .all()
     )
-
-    # ===== 组装结果 =====
-    screenshots = []
-    for screenshot, employee_name in results:
-        screenshot_dict = screenshot.to_dict()
-        screenshot_dict["employee_name"] = employee_name
-        screenshots.append(screenshot_dict)
-    # ==================
 
     return screenshots
 
@@ -828,26 +801,12 @@ def get_recent_screenshots(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取最近的截图"""
-    # ===== 修改：使用 join 一次性加载员工信息 =====
-    results = (
-        db.query(models.Screenshot, models.Employee.name.label("employee_name"))
-        .outerjoin(
-            models.Employee,
-            models.Screenshot.employee_id == models.Employee.employee_id,
-        )
+    screenshots = (
+        db.query(models.Screenshot)
         .order_by(models.Screenshot.screenshot_time.desc())
         .limit(limit)
         .all()
     )
-    # ==========================================
-
-    # ===== 组装结果 =====
-    screenshots = []
-    for screenshot, employee_name in results:
-        screenshot_dict = screenshot.to_dict()
-        screenshot_dict["employee_name"] = employee_name
-        screenshots.append(screenshot_dict)
-    # ==================
 
     return screenshots
 
@@ -1267,7 +1226,6 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from fastapi.responses import FileResponse
 import os
-from server_config import Config  # 导入配置
 
 # 1. 挂载根目录（提供前端页面）
 index_path = Path("index.html")
@@ -1277,35 +1235,35 @@ if index_path.exists():
 else:
     logger.warning(f"⚠️ index.html 不存在于根目录")
 
-# 2. 挂载截图目录（提供图片文件）- 使用配置中的路径
-screenshots_path = Path(Config.SCREENSHOT_DIR)  # 从配置读取路径
+# 2. 挂载截图目录（提供图片文件）
+screenshots_path = Path("/data/screenshots")
 if screenshots_path.exists():
     app.mount(
-        "/screenshots", StaticFiles(directory=str(screenshots_path)), name="screenshots"
+        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
     )
-    logger.info(f"✅ 截图目录已挂载: {screenshots_path} -> /screenshots")
+    logger.info(f"✅ 截图目录已挂载: /data/screenshots")
 
     # 列出一些文件用于调试
     try:
-        all_files = list(screenshots_path.glob("**/*.webp"))
-        logger.info(f"📸 总共找到 {len(all_files)} 个截图文件")
-        if all_files:
-            # 列出前3个文件的相对路径
-            sample = [str(f.relative_to(screenshots_path)) for f in all_files[:3]]
-            logger.info(f"📸 示例截图: {sample}")
-
-            # 特别检查今天和梁珂的截图
-            today = datetime.now().strftime("%Y-%m-%d")
-            liangke_files = list(screenshots_path.glob(f"梁珂/LiangKe/{today}/*.webp"))
-            logger.info(f"📸 梁珂今日截图数量: {len(liangke_files)}")
+        files = list(screenshots_path.glob("**/*.webp"))[:5]
+        if files:
+            logger.info(
+                f"📸 找到示例截图: {[str(f.relative_to(screenshots_path)) for f in files]}"
+            )
     except Exception as e:
         logger.error(f"❌ 读取截图目录失败: {e}")
 else:
-    logger.error(f"❌ 截图目录不存在: {screenshots_path}")
-    # 尝试创建目录
-    screenshots_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"✅ 已创建截图目录: {screenshots_path}")
     logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
+
+
+# 3. （可选）保留原来的文件服务路由作为备用
+@app.get("/screenshots/{path:path}", tags=["文件"])
+async def serve_screenshot_alt(path: str):
+    """备用截图文件服务"""
+    filepath = Path("/data/screenshots") / path
+    if filepath.exists() and filepath.is_file():
+        return FileResponse(filepath)
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 if __name__ == "__main__":
