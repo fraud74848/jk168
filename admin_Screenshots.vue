@@ -233,7 +233,7 @@ import {
   Picture,
   Clock,
   User,
-  Computer,
+  Monitor,
   Document,
   Lock,
   Download,
@@ -616,3 +616,4 @@ onMounted(() => {
   border-radius: 8px;
 }
 </style>
+
