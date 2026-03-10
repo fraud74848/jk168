@@ -48,30 +48,10 @@ from server_auth import (
 )
 from server_cleanup import DataCleanup
 from server_config import Config
-from zoneinfo import ZoneInfo
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-UTC_TZ = ZoneInfo("UTC")
-
-
-def utc_to_beijing(utc_dt):
-    """将UTC时间转换为北京时间"""
-    if not utc_dt:
-        return None
-    # 如果时间是naive（无时区），先设为UTC
-    if utc_dt.tzinfo is None:
-        utc_dt = utc_dt.replace(tzinfo=UTC_TZ)
-    # 转换为北京时间
-    beijing_dt = utc_dt.astimezone(BEIJING_TZ)
-    return beijing_dt
-
-
-
 
 # 创建数据库表
 models.Base.metadata.create_all(bind=engine)
@@ -566,7 +546,6 @@ async def upload_batch(
 
 
 # ==================== 员工管理接口 ====================
-# ==================== 员工管理接口 ====================
 
 
 @app.get("/api/employees", response_model=List[schemas.Employee], tags=["员工"])
@@ -589,10 +568,7 @@ def get_employees(
     return employees
 
 
-# ⚠️ 修改这里：添加 :path
-@app.get(
-    "/api/employees/{employee_id:path}", response_model=schemas.Employee, tags=["员工"]
-)
+@app.get("/api/employees/{employee_id}", response_model=schemas.Employee, tags=["员工"])
 def get_employee(
     employee_id: str,
     db: Session = Depends(get_db),
@@ -636,10 +612,7 @@ def create_employee(
     return db_employee
 
 
-# ✅ 正确（已有 :path）
-@app.put(
-    "/api/employees/{employee_id:path}", response_model=schemas.Employee, tags=["员工"]
-)
+@app.put("/api/employees/{employee_id}", response_model=schemas.Employee, tags=["员工"])
 def update_employee(
     employee_id: str,
     employee_update: schemas.EmployeeUpdate,
@@ -666,8 +639,7 @@ def update_employee(
     return db_employee
 
 
-# ✅ 正确（已有 :path）
-@app.delete("/api/employees/{employee_id:path}", tags=["员工"])
+@app.delete("/api/employees/{employee_id}", tags=["员工"])
 def delete_employee(
     employee_id: str,
     db: Session = Depends(get_db),
@@ -703,8 +675,7 @@ def delete_employee(
     return {"message": "员工已删除"}
 
 
-# ✅ 正确（已有 :path）
-@app.get("/api/employees/{employee_id:path}/dates", tags=["员工"])
+@app.get("/api/employees/{employee_id}/dates", tags=["员工"])
 def get_employee_dates(
     employee_id: str,
     db: Session = Depends(get_db),
@@ -729,6 +700,8 @@ def get_employee_dates(
 
 
 # ==================== 截图接口 ====================
+
+
 @app.get("/api/screenshots", response_model=List[schemas.Screenshot], tags=["截图"])
 def get_screenshots(
     employee_id: Optional[str] = None,
@@ -759,13 +732,6 @@ def get_screenshots(
         .all()
     )
 
-    # 🔴 新增：转换时间为北京时间
-    for s in screenshots:
-        if s.screenshot_time:
-            s.screenshot_time = utc_to_beijing(s.screenshot_time)
-        if s.uploaded_at:
-            s.uploaded_at = utc_to_beijing(s.uploaded_at)
-
     return screenshots
 
 
@@ -782,7 +748,6 @@ def get_screenshots_by_date(
 ):
     """获取员工指定日期的截图"""
     try:
-        # 🔴 注意：这里查询时仍然用UTC时间
         start = datetime.strptime(date, "%Y-%m-%d")
         end = start + timedelta(days=1)
     except:
@@ -798,13 +763,6 @@ def get_screenshots_by_date(
         .order_by(models.Screenshot.screenshot_time.desc())
         .all()
     )
-
-    # 🔴 新增：转换时间为北京时间
-    for s in screenshots:
-        if s.screenshot_time:
-            s.screenshot_time = utc_to_beijing(s.screenshot_time)
-        if s.uploaded_at:
-            s.uploaded_at = utc_to_beijing(s.uploaded_at)
 
     return screenshots
 
@@ -824,13 +782,6 @@ def get_recent_screenshots(
         .limit(limit)
         .all()
     )
-
-    # 🔴 新增：转换时间为北京时间
-    for s in screenshots:
-        if s.screenshot_time:
-            s.screenshot_time = utc_to_beijing(s.screenshot_time)
-        if s.uploaded_at:
-            s.uploaded_at = utc_to_beijing(s.uploaded_at)
 
     return screenshots
 
@@ -904,57 +855,44 @@ def delete_client(
 
 
 # ==================== 统计接口 ====================
+
+
 @app.get("/api/stats", tags=["统计"])
 def get_stats(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """获取系统统计信息（北京时间）"""
-    # 获取当前UTC时间
-    now_utc = datetime.utcnow()
+    """获取系统统计信息"""
+    now = datetime.utcnow()
+    today = now.date()
+    week_ago = now - timedelta(days=7)
 
-    # 转换为北京时间用于显示
-    now_beijing = utc_to_beijing(now_utc)
-    today_beijing = now_beijing.date()
-
-    # 用于数据库查询的UTC时间范围
-    today_start_utc = datetime(now_utc.year, now_utc.month, now_utc.day)
-    yesterday_start_utc = today_start_utc - timedelta(days=1)
-    week_ago_utc = now_utc - timedelta(days=7)
-
-    # 在线客户端判断（使用UTC）
-    cutoff_utc = now_utc - timedelta(minutes=10)
-
-    # 今日截图（基于北京时间）
+    # 今日截图
     today_count = (
         db.query(models.Screenshot)
-        .filter(
-            models.Screenshot.screenshot_time >= today_start_utc,
-            models.Screenshot.screenshot_time < today_start_utc + timedelta(days=1),
-        )
+        .filter(func.date(models.Screenshot.screenshot_time) == today)
         .count()
     )
 
-    # 昨日截图（基于北京时间）
+    # 昨日截图
+    yesterday = today - timedelta(days=1)
     yesterday_count = (
         db.query(models.Screenshot)
-        .filter(
-            models.Screenshot.screenshot_time >= yesterday_start_utc,
-            models.Screenshot.screenshot_time < yesterday_start_utc + timedelta(days=1),
-        )
+        .filter(func.date(models.Screenshot.screenshot_time) == yesterday)
         .count()
     )
 
-    # 本周截图（基于UTC，7天）
+    # 本周截图
     week_count = (
         db.query(models.Screenshot)
-        .filter(models.Screenshot.screenshot_time >= week_ago_utc)
+        .filter(models.Screenshot.screenshot_time >= week_ago)
         .count()
     )
 
     # 在线客户端
+    cutoff = now - timedelta(minutes=10)
     online_clients = (
-        db.query(models.Client).filter(models.Client.last_seen >= cutoff_utc).count()
+        db.query(models.Client).filter(models.Client.last_seen >= cutoff).count()
     )
 
     # 总数
@@ -977,30 +915,22 @@ def get_stats(
         .count()
     )
 
-    # 每小时活动（基于UTC，但返回给前端时已转换为北京时间）
+    # 每小时活动
     hourly = []
-    beijing_hourly = [0] * 24  # 初始化24个0
-
-    # 查询今天的所有截图
-    today_screenshots = (
-        db.query(models.Screenshot)
-        .filter(
-            models.Screenshot.screenshot_time >= today_start_utc,
-            models.Screenshot.screenshot_time < today_start_utc + timedelta(days=1),
+    for i in range(24):
+        start = now.replace(hour=i, minute=0, second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+        count = (
+            db.query(models.Screenshot)
+            .filter(
+                models.Screenshot.screenshot_time >= start,
+                models.Screenshot.screenshot_time < end,
+            )
+            .count()
         )
-        .all()
-    )
+        hourly.append(count)
 
-    # 按北京时间的小时统计
-    for s in today_screenshots:
-        if s.screenshot_time:
-            beijing_time = utc_to_beijing(s.screenshot_time)
-            hour = beijing_time.hour
-            beijing_hourly[hour] = beijing_hourly.get(hour, 0) + 1
-
-    hourly = beijing_hourly
-
-    # 最近活动（转换为北京时间）
+    # 最近活动
     recent_activities = (
         db.query(models.Activity)
         .order_by(models.Activity.created_at.desc())
@@ -1008,20 +938,7 @@ def get_stats(
         .all()
     )
 
-    recent_activities_list = []
-    for a in recent_activities:
-        beijing_time = utc_to_beijing(a.created_at)
-        recent_activities_list.append(
-            {
-                "employee_id": a.employee_id,
-                "action": a.action,
-                "time": (
-                    beijing_time.strftime("%Y-%m-%d %H:%M:%S") if beijing_time else None
-                ),
-            }
-        )
-
-    # 各员工截图统计（基于北京时间）
+    # 各员工截图统计
     top_employees = []
     employees = db.query(models.Employee).limit(5).all()
     for emp in employees:
@@ -1029,8 +946,7 @@ def get_stats(
             db.query(models.Screenshot)
             .filter(
                 models.Screenshot.employee_id == emp.employee_id,
-                models.Screenshot.screenshot_time >= today_start_utc,
-                models.Screenshot.screenshot_time < today_start_utc + timedelta(days=1),
+                func.date(models.Screenshot.screenshot_time) == today,
             )
             .count()
         )
@@ -1064,8 +980,15 @@ def get_stats(
             "jpg": jpg_count,
             "other": total_screenshots - webp_count - jpg_count,
         },
-        "hourly": hourly,  # 现在是北京时间的每小时分布
-        "recent_activities": recent_activities_list,  # 北京时间
+        "hourly": hourly,
+        "recent_activities": [
+            {
+                "employee_id": a.employee_id,
+                "action": a.action,
+                "time": a.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            for a in recent_activities
+        ],
         "top_employees": top_employees,
         "auto_cleanup": {
             "enabled": Config.AUTO_CLEANUP_ENABLED,
@@ -1089,21 +1012,14 @@ def get_activities(
         .all()
     )
 
-    # 🔴 转换时间为北京时间
-    result = []
-    for a in activities:
-        beijing_time = utc_to_beijing(a.created_at)
-        result.append(
-            {
-                "employee_id": a.employee_id,
-                "action": a.action,
-                "time": (
-                    beijing_time.strftime("%Y-%m-%d %H:%M:%S") if beijing_time else None
-                ),
-            }
-        )
-
-    return result
+    return [
+        {
+            "employee_id": a.employee_id,
+            "action": a.action,
+            "time": a.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        for a in activities
+    ]
 
 
 # ==================== 清理接口 ====================
@@ -1167,6 +1083,28 @@ def get_cleanup_status(
         "last_cleanup": last_cleanup.created_at.isoformat() if last_cleanup else None,
     }
 
+
+# ==================== 文件服务 ====================
+
+
+@app.get("/screenshots/{path:path}", tags=["文件"])
+def serve_screenshot(path: str):
+    """提供截图文件（公开访问）"""
+    # 安全检查：防止路径遍历攻击
+    if ".." in path or path.startswith("/"):
+        raise HTTPException(status_code=404)
+
+    # 如果 path 为空，返回 404
+    if not path or path.strip() == "":
+        raise HTTPException(status_code=404, detail="File not specified")
+
+    filepath = STORAGE_PATH / path
+
+    # 检查文件是否存在且是文件（不是目录）
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(filepath)
 
 
 # ==================== 工具函数 ====================
@@ -1243,63 +1181,43 @@ from pathlib import Path
 from fastapi.responses import FileResponse
 import os
 
-# 1. 前端静态文件（如果存在）
+# 1. 挂载根目录（提供前端页面）
 index_path = Path("index.html")
 if index_path.exists():
     app.mount("/", StaticFiles(directory=".", html=True), name="static")
     logger.info(f"✅ 前端静态文件已挂载")
-
-    # 列出前端文件帮助调试
-    try:
-        frontend_files = [f for f in Path(".").iterdir() if f.is_file()][:10]
-        logger.info(f"📂 根目录文件: {[f.name for f in frontend_files]}")
-    except Exception as e:
-        logger.error(f"❌ 读取根目录失败: {e}")
 else:
     logger.warning(f"⚠️ index.html 不存在于根目录")
 
-# 2. 截图目录配置
-screenshots_path = Path(Config.SCREENSHOT_DIR)  # 从配置读取
-if not screenshots_path.exists():
-    logger.warning(f"⚠️ 截图目录不存在: {screenshots_path}")
-    screenshots_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"✅ 已创建截图目录: {screenshots_path}")
-
-
-# 3. 截图文件路由
-@app.get("/screenshots/{path:path}", tags=["文件"])
-async def serve_screenshot(path: str):
-    """提供截图文件服务"""
-    # 安全检查：防止路径遍历攻击
-    if ".." in path or path.startswith("/") or path.startswith("\\"):
-        logger.warning(f"❌ 非法路径访问: {path}")
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # 构建完整路径
-    filepath = screenshots_path / path
-
-    # 记录访问日志（可选）
-    logger.debug(f"📸 请求截图: {path}")
-
-    # 检查文件是否存在
-    if not filepath.exists() or not filepath.is_file():
-        logger.warning(f"❌ 截图不存在: {path}")
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # 返回文件
-    return FileResponse(
-        filepath, media_type="image/webp" if path.endswith(".webp") else "image/jpeg"
+# 2. 挂载截图目录（提供图片文件）
+screenshots_path = Path("/data/screenshots")
+if screenshots_path.exists():
+    app.mount(
+        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
     )
+    logger.info(f"✅ 截图目录已挂载: /data/screenshots")
+
+    # 列出一些文件用于调试
+    try:
+        files = list(screenshots_path.glob("**/*.webp"))[:5]
+        if files:
+            logger.info(
+                f"📸 找到示例截图: {[str(f.relative_to(screenshots_path)) for f in files]}"
+            )
+    except Exception as e:
+        logger.error(f"❌ 读取截图目录失败: {e}")
+else:
+    logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
 
 
-# 4. （可选）添加缩略图路由
-@app.get("/thumbnails/{path:path}", tags=["文件"])
-async def serve_thumbnail(path: str):
-    """提供缩略图文件服务"""
-    # 类似上面的逻辑，但指向缩略图目录
-    thumbnail_path = screenshots_path / "thumbnails" / path
-    # ... 安全检查 ...
-    return FileResponse(thumbnail_path)
+# 3. （可选）保留原来的文件服务路由作为备用
+@app.get("/screenshots/{path:path}", tags=["文件"])
+async def serve_screenshot_alt(path: str):
+    """备用截图文件服务"""
+    filepath = Path("/data/screenshots") / path
+    if filepath.exists() and filepath.is_file():
+        return FileResponse(filepath)
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 if __name__ == "__main__":
