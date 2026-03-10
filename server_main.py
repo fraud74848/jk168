@@ -1129,25 +1129,45 @@ def get_cleanup_status(
 
 # ==================== 文件服务 ====================
 
-
 @app.get("/screenshots/{path:path}", tags=["文件"])
-def serve_screenshot(path: str):
+async def serve_screenshot(path: str):
     """提供截图文件（公开访问）"""
-    # 安全检查：防止路径遍历攻击
-    if ".." in path or path.startswith("/"):
-        raise HTTPException(status_code=404)
-
-    # 如果 path 为空，返回 404
+    
     if not path or path.strip() == "":
         raise HTTPException(status_code=404, detail="File not specified")
 
-    filepath = STORAGE_PATH / path
+    try:
+        # 统一路径分隔符
+        path = path.replace("\\", "/")
+        
+        # 主存储路径
+        base_path = STORAGE_PATH.resolve()
+        file_path = (base_path / path).resolve()
 
-    # 检查文件是否存在且是文件（不是目录）
-    if not filepath.exists() or not filepath.is_file():
+        # 防止路径逃逸
+        if not str(file_path).startswith(str(base_path)):
+            logger.warning(f"路径逃逸尝试: {path}")
+            raise HTTPException(status_code=404, detail="Invalid path")
+
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+
+        # 备用路径（兼容旧数据）
+        backup_base = Path("/data/screenshots").resolve()
+        backup_file = (backup_base / path).resolve()
+
+        if str(backup_file).startswith(str(backup_base)) and backup_file.exists():
+            logger.info(f"使用备用路径找到文件: {backup_file}")
+            return FileResponse(backup_file)
+
+        logger.warning(f"文件不存在: {path}")
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(filepath)
+    except HTTPException:
+        raise  # 直接抛出HTTP异常
+    except Exception as e:
+        logger.error(f"文件访问错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Server error")
 
 
 # ==================== 工具函数 ====================
@@ -1254,16 +1274,6 @@ if screenshots_path.exists():
         logger.error(f"❌ 读取截图目录失败: {e}")
 else:
     logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
-
-
-# 3. （可选）保留原来的文件服务路由作为备用
-@app.get("/screenshots/{path:path}", tags=["文件"])
-async def serve_screenshot_alt(path: str):
-    """备用截图文件服务"""
-    filepath = Path("/data/screenshots") / path
-    if filepath.exists() and filepath.is_file():
-        return FileResponse(filepath)
-    raise HTTPException(status_code=404, detail="File not found")
 
 
 if __name__ == "__main__":
