@@ -48,6 +48,7 @@ from server_auth import (
 )
 from server_cleanup import DataCleanup
 from server_config import Config
+from server_timezone import get_beijing_now, get_date_range_for_day
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -131,7 +132,7 @@ async def health_check():
     """系统健康检查"""
     health_status = {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": get_beijing_now().isoformat(),
         "version": "3.0.0",
         "auto_cleanup": {
             "enabled": Config.AUTO_CLEANUP_ENABLED,
@@ -232,8 +233,6 @@ async def get_current_user_info(
 
 
 # ==================== 客户端接口 ====================
-
-
 @app.post("/api/client/register", response_model=schemas.Client, tags=["客户端"])
 async def register_client(
     client_info: schemas.ClientCreate,
@@ -241,6 +240,11 @@ async def register_client(
     db: Session = Depends(get_db),
 ):
     """客户端注册"""
+
+    # 获取当前北京时间
+    beijing_now = get_beijing_now()
+    # ===========================
+
     # 检查是否已存在
     existing_client = (
         db.query(models.Client)
@@ -252,11 +256,9 @@ async def register_client(
     )
 
     if existing_client:
-        # 更新现有客户端
         for key, value in client_info.dict(exclude_unset=True).items():
             setattr(existing_client, key, value)
-        existing_client.last_seen = datetime.utcnow()
-
+        existing_client.last_seen = beijing_now  # 使用北京时间
         db.commit()
         db.refresh(existing_client)
         logger.info(f"客户端更新: {existing_client.client_id}")
@@ -300,7 +302,9 @@ async def register_client(
         cpu_id=client_info.cpu_id,
         disk_serial=client_info.disk_serial,
         client_version=client_info.client_version,
-        last_seen=datetime.utcnow(),
+        # ===== 修改点：使用北京时间 =====
+        last_seen=beijing_now,  # 原来是 datetime.utcnow()
+        # ==============================
         config={
             "interval": Config.SCREENSHOT_INTERVAL,
             "quality": client_info.quality or Config.SCREENSHOT_QUALITY,
@@ -336,6 +340,10 @@ async def client_heartbeat(
     db: Session = Depends(get_db),
 ):
     """客户端心跳"""
+    # ===== 添加北京时间 =====
+    beijing_now = get_beijing_now()
+    # ======================
+
     client = (
         db.query(models.Client).filter(models.Client.client_id == client_id).first()
     )
@@ -344,7 +352,9 @@ async def client_heartbeat(
         raise HTTPException(status_code=404, detail="客户端不存在")
 
     # 更新客户端信息
-    client.last_seen = datetime.utcnow()
+    # ===== 修改点：使用北京时间 =====
+    client.last_seen = beijing_now  # 原来是 datetime.utcnow()
+    # ==============================
     client.last_stats = heartbeat.stats
     client.ip_address = heartbeat.ip_address or client.ip_address
 
@@ -352,7 +362,7 @@ async def client_heartbeat(
 
     return {
         "status": "ok",
-        "server_time": datetime.utcnow().isoformat(),
+        "server_time": beijing_now.isoformat(),  # 也返回北京时间
         "config": client.config,
     }
 
@@ -378,8 +388,6 @@ async def get_client_config(client_id: str, db: Session = Depends(get_db)):
 
 
 # ==================== 截图上传接口 ====================
-
-
 @app.post("/api/upload", tags=["截图"])
 async def upload_screenshot(
     background_tasks: BackgroundTasks,
@@ -400,14 +408,21 @@ async def upload_screenshot(
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {file_ext}")
 
+    from server_timezone import get_beijing_now
+    from datetime import datetime
+
+    # ===== 获取北京时间 =====
+    beijing_now = get_beijing_now()
+    # ======================
+
     # 解析时间
     try:
         if timestamp:
             screenshot_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
         else:
-            screenshot_time = datetime.utcnow()
+            screenshot_time = beijing_now  # 使用北京时间
     except:
-        screenshot_time = datetime.utcnow()
+        screenshot_time = beijing_now  # 使用北京时间
 
     # 查找或创建员工
     employee = (
@@ -429,15 +444,17 @@ async def upload_screenshot(
         db.add(employee)
         logger.info(f"自动创建员工: {employee_id}")
 
+    # ===== 修改点：更新客户端时也使用北京时间 =====
     # 更新客户端
     if client_id:
         client = (
             db.query(models.Client).filter(models.Client.client_id == client_id).first()
         )
         if client:
-            client.last_seen = datetime.utcnow()
+            client.last_seen = beijing_now  # 原来是 datetime.utcnow()
             if not client.employee_id:
                 client.employee_id = employee_id
+    # ============================================
 
     # 保存文件
     date_str = screenshot_time.strftime("%Y-%m-%d")
@@ -525,10 +542,18 @@ async def upload_batch(
     batch: UploadFile = File(...),
 ):
     """批量上传截图"""
+    from server_timezone import get_beijing_now
+
+    # ===== 修改点：使用北京时间生成文件名 =====
     # 保存ZIP文件
     zip_path = (
-        STORAGE_PATH / "temp" / f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        STORAGE_PATH
+        / "temp"
+        / f"batch_{get_beijing_now().strftime('%Y%m%d_%H%M%S')}.zip"
+        # 原来是：datetime.now().strftime('%Y%m%d_%H%M%S')
     )
+    # ======================================
+
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -855,47 +880,62 @@ def delete_client(
 
 
 # ==================== 统计接口 ====================
-
-
 @app.get("/api/stats", tags=["统计"])
 def get_stats(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取系统统计信息"""
-    now = datetime.utcnow()
-    today = now.date()
-    week_ago = now - timedelta(days=7)
+    from datetime import datetime, timedelta
+    from server_timezone import get_beijing_now, get_date_range_for_day
+
+    # ===== 使用工具函数获取北京时间 =====
+    beijing_now = get_beijing_now()
+    today = beijing_now.date()
+    week_ago = beijing_now - timedelta(days=7)
+
+    # ===== 使用工具函数获取日期范围 =====
+    today_start, today_end = get_date_range_for_day(beijing_now)
+
+    # 昨日
+    yesterday = today - timedelta(days=1)
+    yesterday_start, yesterday_end = get_date_range_for_day(yesterday)
+    # ====================================
 
     # 今日截图
     today_count = (
         db.query(models.Screenshot)
-        .filter(func.date(models.Screenshot.screenshot_time) == today)
+        .filter(
+            models.Screenshot.screenshot_time >= today_start,
+            models.Screenshot.screenshot_time < today_end,
+        )
         .count()
     )
 
     # 昨日截图
-    yesterday = today - timedelta(days=1)
     yesterday_count = (
         db.query(models.Screenshot)
-        .filter(func.date(models.Screenshot.screenshot_time) == yesterday)
+        .filter(
+            models.Screenshot.screenshot_time >= yesterday_start,
+            models.Screenshot.screenshot_time < yesterday_end,
+        )
         .count()
     )
 
-    # 本周截图
+    # 本周截图（过去7天）
     week_count = (
         db.query(models.Screenshot)
         .filter(models.Screenshot.screenshot_time >= week_ago)
         .count()
     )
 
-    # 在线客户端
-    cutoff = now - timedelta(minutes=10)
+    # 在线客户端 - 判断最后在线时间是否在最近10分钟内
+    cutoff = beijing_now - timedelta(minutes=10)
     online_clients = (
         db.query(models.Client).filter(models.Client.last_seen >= cutoff).count()
     )
 
-    # 总数
+    # 总数（这些不受时间影响）
     total_screenshots = db.query(models.Screenshot).count()
     total_employees = db.query(models.Employee).count()
     total_clients = db.query(models.Client).count()
@@ -915,10 +955,10 @@ def get_stats(
         .count()
     )
 
-    # 每小时活动
+    # 每小时活动（使用北京时间）
     hourly = []
     for i in range(24):
-        start = now.replace(hour=i, minute=0, second=0, microsecond=0)
+        start = beijing_now.replace(hour=i, minute=0, second=0, microsecond=0)
         end = start + timedelta(hours=1)
         count = (
             db.query(models.Screenshot)
@@ -938,7 +978,7 @@ def get_stats(
         .all()
     )
 
-    # 各员工截图统计
+    # 各员工截图统计（使用北京时间）
     top_employees = []
     employees = db.query(models.Employee).limit(5).all()
     for emp in employees:
@@ -946,7 +986,8 @@ def get_stats(
             db.query(models.Screenshot)
             .filter(
                 models.Screenshot.employee_id == emp.employee_id,
-                func.date(models.Screenshot.screenshot_time) == today,
+                models.Screenshot.screenshot_time >= today_start,
+                models.Screenshot.screenshot_time < today_end,
             )
             .count()
         )
@@ -985,7 +1026,9 @@ def get_stats(
             {
                 "employee_id": a.employee_id,
                 "action": a.action,
-                "time": a.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "time": (
+                    a.created_at.strftime("%Y-%m-%d %H:%M:%S") if a.created_at else None
+                ),
             }
             for a in recent_activities
         ],
@@ -1142,15 +1185,18 @@ def process_batch_upload(
 ):
     """处理批量上传的ZIP文件"""
     import zipfile
+    from server_timezone import get_beijing_now  # 添加导入
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            # 解压到临时目录
+            # ===== 修改点：解压到以北京时间命名的临时目录 =====
             extract_path = (
                 STORAGE_PATH
                 / "temp"
-                / f"extract_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                / f"extract_{get_beijing_now().strftime('%Y%m%d_%H%M%S')}"
+                # 原来是：datetime.now().strftime('%Y%m%d_%H%M%S')
             )
+            # ==============================================
             extract_path.mkdir(parents=True, exist_ok=True)
             zip_ref.extractall(extract_path)
 
