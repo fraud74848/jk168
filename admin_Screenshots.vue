@@ -287,13 +287,15 @@ const previewTitle = computed(() => {
 const getEmployeeName = (item) => {
   if (!item || !item.employee_id) return "未知员工";
 
-  // 1. 优先使用后端返回的 employee_name（最准确）
-  if (item.employee_name) {
-    return item.employee_name;
+  // 1. 优先使用后端返回的 name 字段（现在有了！）
+  if (item.name) {
+    console.log("使用 name 字段:", item.name); // 添加调试日志
+    return item.name;
   }
 
   // 2. 其次使用映射表中的姓名（兼容旧数据）
   const name = employeeNameMap.value.get(item.employee_id);
+  console.log("使用映射表:", name); // 添加调试日志
   return name || item.employee_id;
 };
 // ============================
