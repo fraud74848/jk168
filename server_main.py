@@ -1267,6 +1267,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from fastapi.responses import FileResponse
 import os
+from server_config import Config  # 导入配置
 
 # 1. 挂载根目录（提供前端页面）
 index_path = Path("index.html")
@@ -1276,35 +1277,35 @@ if index_path.exists():
 else:
     logger.warning(f"⚠️ index.html 不存在于根目录")
 
-# 2. 挂载截图目录（提供图片文件）
-screenshots_path = Path("/data/screenshots")
+# 2. 挂载截图目录（提供图片文件）- 使用配置中的路径
+screenshots_path = Path(Config.SCREENSHOT_DIR)  # 从配置读取路径
 if screenshots_path.exists():
     app.mount(
-        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
+        "/screenshots", StaticFiles(directory=str(screenshots_path)), name="screenshots"
     )
-    logger.info(f"✅ 截图目录已挂载: /data/screenshots")
+    logger.info(f"✅ 截图目录已挂载: {screenshots_path} -> /screenshots")
 
     # 列出一些文件用于调试
     try:
-        files = list(screenshots_path.glob("**/*.webp"))[:5]
-        if files:
-            logger.info(
-                f"📸 找到示例截图: {[str(f.relative_to(screenshots_path)) for f in files]}"
-            )
+        all_files = list(screenshots_path.glob("**/*.webp"))
+        logger.info(f"📸 总共找到 {len(all_files)} 个截图文件")
+        if all_files:
+            # 列出前3个文件的相对路径
+            sample = [str(f.relative_to(screenshots_path)) for f in all_files[:3]]
+            logger.info(f"📸 示例截图: {sample}")
+
+            # 特别检查今天和梁珂的截图
+            today = datetime.now().strftime("%Y-%m-%d")
+            liangke_files = list(screenshots_path.glob(f"梁珂/LiangKe/{today}/*.webp"))
+            logger.info(f"📸 梁珂今日截图数量: {len(liangke_files)}")
     except Exception as e:
         logger.error(f"❌ 读取截图目录失败: {e}")
 else:
+    logger.error(f"❌ 截图目录不存在: {screenshots_path}")
+    # 尝试创建目录
+    screenshots_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"✅ 已创建截图目录: {screenshots_path}")
     logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
-
-
-# 3. （可选）保留原来的文件服务路由作为备用
-@app.get("/screenshots/{path:path}", tags=["文件"])
-async def serve_screenshot_alt(path: str):
-    """备用截图文件服务"""
-    filepath = Path("/data/screenshots") / path
-    if filepath.exists() and filepath.is_file():
-        return FileResponse(filepath)
-    raise HTTPException(status_code=404, detail="File not found")
 
 
 if __name__ == "__main__":
