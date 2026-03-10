@@ -1,3 +1,4 @@
+# server_schemas.py
 """
 Pydantic数据验证模型
 """
@@ -155,8 +156,10 @@ class Screenshot(ScreenshotBase):
     id: int
     thumbnail: Optional[str] = None
     storage_url: Optional[str] = None
-    uploaded_at: None
-    screenshot_time: None
+    # ===== 修复：将 None 改为 Optional[datetime] = None =====
+    uploaded_at: Optional[datetime] = None
+    screenshot_time: Optional[datetime] = None
+    # ===================================================
     url: Optional[str] = None
     time: Optional[str] = None
     date: Optional[str] = None
