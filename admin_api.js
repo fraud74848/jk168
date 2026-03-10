@@ -82,13 +82,16 @@ export const authApi = {
 };
 
 // ==================== 员工相关API ====================
+// ==================== 员工相关API ====================
 export const employeeApi = {
   getEmployees(params) {
     return api.get("/employees", { params });
   },
 
   getEmployee(id) {
-    return api.get(`/employees/${id}`);
+    // 对ID进行编码
+    const encodedId = encodeURIComponent(id);
+    return api.get(`/employees/${encodedId}`);
   },
 
   createEmployee(data) {
@@ -96,15 +99,23 @@ export const employeeApi = {
   },
 
   updateEmployee(id, data) {
-    return api.put(`/employees/${id}`, data);
+    // ✅ 关键修复：对包含反斜杠的ID进行编码
+    const encodedId = encodeURIComponent(id);
+    console.log("原始ID:", id); // OS-20250218QMGZ\Administrator
+    console.log("编码后:", encodedId); // OS-20250218QMGZ%5CAdministrator
+    return api.put(`/employees/${encodedId}`, data);
   },
 
   deleteEmployee(id) {
-    return api.delete(`/employees/${id}`);
+    // 删除也需要编码
+    const encodedId = encodeURIComponent(id);
+    return api.delete(`/employees/${encodedId}`);
   },
 
   getEmployeeDates(id) {
-    return api.get(`/employees/${id}/dates`);
+    // 获取日期也需要编码
+    const encodedId = encodeURIComponent(id);
+    return api.get(`/employees/${encodedId}/dates`);
   },
 };
 
