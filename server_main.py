@@ -243,7 +243,6 @@ async def register_client(
 
     # 获取当前北京时间
     beijing_now = get_beijing_now()
-    # ===========================
 
     # 检查是否已存在
     existing_client = (
@@ -258,7 +257,7 @@ async def register_client(
     if existing_client:
         for key, value in client_info.dict(exclude_unset=True).items():
             setattr(existing_client, key, value)
-        existing_client.last_seen = beijing_now  # 使用北京时间
+        existing_client.last_seen = beijing_now
         db.commit()
         db.refresh(existing_client)
         logger.info(f"客户端更新: {existing_client.client_id}")
@@ -278,17 +277,26 @@ async def register_client(
     )
 
     if not employee:
-        # 自动创建员工
+        # ===== 修改：优先使用客户端传入的姓名 =====
+        if hasattr(client_info, "employee_name") and client_info.employee_name:
+            employee_name = client_info.employee_name
+        else:
+            employee_name = (
+                f"{client_info.computer_name} - {client_info.windows_user}"
+                if client_info.windows_user
+                else client_info.computer_name
+            )
+
         employee = models.Employee(
             employee_id=employee_id,
-            name=f"{client_info.computer_name} - {client_info.windows_user}",
+            name=employee_name,  # 使用用户输入的姓名
             computer_name=client_info.computer_name,
             windows_user=client_info.windows_user,
             department="自动注册",
             status="active",
         )
         db.add(employee)
-        logger.info(f"自动创建员工: {employee_id}")
+        logger.info(f"自动创建员工: {employee_id} 姓名: {employee_name}")
 
     # 创建客户端
     new_client = models.Client(
@@ -302,9 +310,7 @@ async def register_client(
         cpu_id=client_info.cpu_id,
         disk_serial=client_info.disk_serial,
         client_version=client_info.client_version,
-        # ===== 修改点：使用北京时间 =====
-        last_seen=beijing_now,  # 原来是 datetime.utcnow()
-        # ==============================
+        last_seen=beijing_now,
         config={
             "interval": Config.SCREENSHOT_INTERVAL,
             "quality": client_info.quality or Config.SCREENSHOT_QUALITY,
@@ -321,12 +327,11 @@ async def register_client(
 
     logger.info(f"新客户端注册: {new_client.client_id} ({employee_id})")
 
-    # 记录活动
     background_tasks.add_task(
         log_activity,
         employee_id,
         "client_registered",
-        {"client_id": new_client.client_id},
+        {"client_id": new_client.client_id, "name": employee_name},
     )
 
     return new_client
