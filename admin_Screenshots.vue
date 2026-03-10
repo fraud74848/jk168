@@ -122,11 +122,8 @@
           <div class="screenshot-info">
             <div class="info-row">
               <el-icon><Clock /></el-icon>
-              <span>{{
-                item.screenshot_time
-                  ? dayjs(item.screenshot_time).format("HH:mm")
-                  : "未知"
-              }}</span>
+              <!-- ===== 修改：使用统一的时间格式化函数 ===== -->
+              <span>{{ formatTime(item.screenshot_time) }}</span>
             </div>
             <div class="info-row">
               <el-icon><User /></el-icon>
@@ -134,6 +131,7 @@
             </div>
             <div class="info-row">
               <el-icon><Document /></el-icon>
+              <!-- ===== 修改：使用统一的文件大小格式化函数 ===== -->
               <span>{{ formatFileSize(item.file_size) }}</span>
             </div>
           </div>
@@ -176,12 +174,9 @@
             <el-descriptions-item label="员工">{{
               currentPreview?.employee_id
             }}</el-descriptions-item>
+            <!-- ===== 修改：使用统一的完整时间格式化函数 ===== -->
             <el-descriptions-item label="时间">{{
-              currentPreview?.screenshot_time
-                ? dayjs(currentPreview.screenshot_time).format(
-                    "YYYY-MM-DD HH:mm:ss",
-                  )
-                : "未知"
+              formatFullDateTime(currentPreview?.screenshot_time)
             }}</el-descriptions-item>
             <el-descriptions-item label="计算机">{{
               currentPreview?.computer_name || "未知"
@@ -218,13 +213,15 @@
 </template>
 
 <script setup>
-// 格式化文件大小
-const formatFileSize = (size) => {
-  if (!size) return "0 B";
-  if (size < 1024) return size + " B";
-  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + " KB";
-  return (size / (1024 * 1024)).toFixed(1) + " MB";
-};
+// ===== 导入统一的时间工具 =====
+import {
+  formatTime,
+  formatFullDateTime,
+  formatFileSize as formatFileSizeUtil,
+  getHour,
+} from "./admin_timezone";
+// ============================
+
 import { ref, computed, onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
@@ -239,7 +236,10 @@ import {
   Download,
 } from "@element-plus/icons-vue";
 import { screenshotApi, employeeApi } from "./admin_api";
-import dayjs from "dayjs";
+
+// ===== 使用统一的文件大小格式化函数 =====
+const formatFileSize = formatFileSizeUtil;
+// ====================================
 
 const route = useRoute();
 const loading = ref(false);
@@ -282,7 +282,7 @@ const getImageUrl = (path) => {
   // 处理Windows路径分隔符
   const cleanPath = path.replace(/\\/g, "/");
 
-  // 使用当前域名（Render上会自动是 https://jk168.onrender.com）
+  // 使用当前域名
   const baseUrl = window.location.origin;
 
   // 如果路径已经以 /screenshots 开头，直接拼接
@@ -293,6 +293,7 @@ const getImageUrl = (path) => {
   // 否则添加 /screenshots 前缀
   return `${baseUrl}/screenshots${cleanPath.startsWith("/") ? "" : "/"}${cleanPath}`;
 };
+
 // 加载员工列表
 const loadEmployees = async () => {
   try {
@@ -331,7 +332,7 @@ const loadScreenshots = async () => {
   }
 };
 
-// 时间筛选
+// ===== 修改：时间筛选使用统一工具获取小时 =====
 const filterByTime = () => {
   if (!screenshots.value || screenshots.value.length === 0) {
     filteredScreenshots.value = [];
@@ -342,13 +343,15 @@ const filterByTime = () => {
     filteredScreenshots.value = screenshots.value;
   } else {
     filteredScreenshots.value = screenshots.value.filter((s) => {
-      if (!s.time) return false;
-      const hour = parseInt(s.time.split(":")[0]);
+      if (!s.screenshot_time) return false;
+      // 使用统一工具获取正确的小时
+      const hour = getHour(s.screenshot_time);
       return hour === timeFilter.value;
     });
   }
   currentPage.value = 1;
 };
+// =========================================
 
 // 应用时间筛选
 const applyTimeFilter = () => {
@@ -383,15 +386,16 @@ const previewImage = (item) => {
   previewVisible.value = true;
 };
 
-// 下载图片
+// ===== 修改：下载图片使用正确的 storage_url =====
 const downloadImage = () => {
   if (!currentPreview.value) return;
 
   const link = document.createElement("a");
-  link.href = getImageUrl(currentPreview.value.url);
-  link.download = currentPreview.value.filename;
+  link.href = getImageUrl(currentPreview.value.storage_url); // 原来是 .url，改为 .storage_url
+  link.download = currentPreview.value.filename || "screenshot.jpg";
   link.click();
 };
+// ============================================
 
 // 监听路由参数
 watch(

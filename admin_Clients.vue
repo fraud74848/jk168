@@ -105,7 +105,7 @@
         <el-table-column label="最后在线" width="180">
           <template #default="{ row }">
             <span :class="{ 'text-danger': !row.is_online }">
-              {{ formatDateTime(row.last_seen) }}
+              {{ formatRelativeTime(row.last_seen) }}
             </span>
           </template>
         </el-table-column>
@@ -140,7 +140,7 @@
         </el-table-column>
       </el-table>
 
-      <!-- 分页 -->
+      <!-- 分页 - 修复后的版本 -->
       <div class="pagination">
         <el-pagination
           v-model:current-page="currentPage"
@@ -148,8 +148,8 @@
           :page-sizes="[10, 20, 50, 100]"
           :total="total"
           layout="total, sizes, prev, pager, next, jumper"
-          @size-change="loadClients"
-          @current-change="loadClients"
+          @size-change="handleSizeChange"
+          @current-change="handleCurrentChange"
         />
       </div>
     </el-card>
@@ -202,6 +202,13 @@
 </template>
 
 <script setup>
+// ===== 导入统一的时间工具 =====
+import {
+  formatRelativeTime,
+  formatDateTime as formatDateTimeUtil,
+} from "./admin_timezone";
+// ============================
+
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -214,7 +221,6 @@ import {
   Delete,
 } from "@element-plus/icons-vue";
 import { clientApi } from "./admin_api";
-import dayjs from "dayjs";
 
 const router = useRouter();
 const loading = ref(false);
@@ -235,7 +241,7 @@ const currentConfig = ref({
   enable_batch_upload: true,
 });
 
-// 统计
+// 统计（这些computed属性基于当前显示的数据，保持不变）
 const totalClients = computed(() => clients.value.length);
 const onlineClients = computed(
   () => clients.value.filter((c) => c.is_online).length,
@@ -244,17 +250,20 @@ const offlineClients = computed(
   () => clients.value.filter((c) => !c.is_online).length,
 );
 
-// 格式化日期时间
-const formatDateTime = (datetime) => {
-  if (!datetime) return "从未";
-  const diff = dayjs().diff(dayjs(datetime), "minute");
-  if (diff < 1) return "刚刚";
-  if (diff < 60) return `${diff}分钟前`;
-  if (diff < 1440) return `${Math.floor(diff / 60)}小时前`;
-  return dayjs(datetime).format("YYYY-MM-DD HH:mm");
+// ===== 修复：分页处理函数 =====
+const handleSizeChange = (val) => {
+  pageSize.value = val;
+  currentPage.value = 1; // 改变每页数量时，回到第一页
+  loadClients();
 };
 
-// 加载客户端列表
+const handleCurrentChange = (val) => {
+  currentPage.value = val;
+  loadClients();
+};
+// ============================
+
+// ===== 修复：加载客户端列表，正确处理总记录数 =====
 const loadClients = async () => {
   loading.value = true;
   try {
@@ -267,15 +276,42 @@ const loadClients = async () => {
       params.online_only = true;
     }
 
-    clients.value = await clientApi.getClients(params);
-    total.value = clients.value.length;
+    // 调用API获取数据
+    const response = await clientApi.getClients(params);
+
+    // 处理API返回的数据格式
+    if (Array.isArray(response)) {
+      // 如果API直接返回数组（旧格式）
+      clients.value = response;
+
+      // 注意：这里无法获取总记录数，需要后端配合修改
+      // 临时方案：如果当前页数据小于每页数量，说明是最后一页
+      if (response.length < pageSize.value) {
+        total.value =
+          (currentPage.value - 1) * pageSize.value + response.length;
+      } else {
+        // 无法确定总记录数，暂时设为较大值或保持原样
+        // 这里保持原逻辑不变，但建议后端返回总记录数
+        total.value = response.length;
+      }
+    } else if (response && typeof response === "object") {
+      // 如果API返回 { items: [], total: 100 } 格式（推荐）
+      clients.value = response.items || [];
+      total.value = response.total || 0;
+    } else {
+      clients.value = [];
+      total.value = 0;
+    }
   } catch (error) {
     console.error("加载客户端列表失败:", error);
     ElMessage.error("加载客户端列表失败");
+    clients.value = [];
+    total.value = 0;
   } finally {
     loading.value = false;
   }
 };
+// ============================
 
 // 显示配置
 const showConfig = (client) => {
@@ -313,6 +349,7 @@ const deleteClient = (client) => {
     try {
       await clientApi.deleteClient(client.client_id);
       ElMessage.success("删除成功");
+      // 删除后重新加载当前页
       loadClients();
     } catch (error) {
       console.error("删除失败:", error);

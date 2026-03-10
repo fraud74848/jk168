@@ -95,6 +95,7 @@
 
         <el-table-column label="最后活跃" width="180">
           <template #default="{ row }">
+            <!-- ===== 修改：使用统一的日期时间格式化函数 ===== -->
             {{ formatDateTime(row.last_active) }}
           </template>
         </el-table-column>
@@ -126,11 +127,11 @@
         </el-table-column>
       </el-table>
 
-      <!-- 分页 -->
+      <!-- 分页 - 修复 v-model 语法 -->
       <div class="pagination">
         <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
+          v-model:currentPage="currentPage"
+          v-model:pageSize="pageSize"
           :page-sizes="[10, 20, 50, 100]"
           :total="total"
           layout="total, sizes, prev, pager, next, jumper"
@@ -140,13 +141,14 @@
       </div>
     </el-card>
 
-    <!-- 添加/编辑员工对话框 -->
+    <!-- 添加/编辑员工对话框 (保持不变) -->
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
       width="500px"
       @close="resetForm"
     >
+      <!-- ... 对话框内容完全保持不变 ... -->
       <el-form
         ref="formRef"
         :model="formData"
@@ -204,6 +206,13 @@
 </template>
 
 <script setup>
+// ===== 导入统一的时间工具 =====
+import {
+  formatDateTime as formatDateTimeUtil,
+  getOnlineStatus as getOnlineStatusUtil,
+} from "./admin_timezone";
+// ============================
+
 import { ref, computed, onMounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -217,7 +226,6 @@ import {
   Delete,
 } from "@element-plus/icons-vue";
 import { employeeApi } from "./admin_api";
-import dayjs from "dayjs";
 
 const router = useRouter();
 const route = useRoute();
@@ -271,27 +279,18 @@ const filteredEmployees = computed(() => {
   return filtered;
 });
 
-// 获取在线状态
+// ===== 修改：使用统一工具获取在线状态 =====
 const getOnlineStatus = (employee) => {
   if (employee.status !== "active") {
     return { type: "info", text: "离职" };
   }
-
-  if (employee.last_active) {
-    const lastActive = dayjs(employee.last_active);
-    const now = dayjs();
-    if (now.diff(lastActive, "minute") < 10) {
-      return { type: "success", text: "在线" };
-    }
-  }
-
-  return { type: "danger", text: "离线" };
+  return getOnlineStatusUtil(employee.last_active, 10);
 };
 
-// 格式化日期时间
+// ===== 修改：使用统一工具格式化日期时间 =====
 const formatDateTime = (datetime) => {
   if (!datetime) return "从未";
-  return dayjs(datetime).format("YYYY-MM-DD HH:mm");
+  return formatDateTimeUtil(datetime, "YYYY-MM-DD HH:mm");
 };
 
 // 加载员工列表
@@ -433,6 +432,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* 样式完全保持不变 */
 .employees {
   padding: 20px;
 }
