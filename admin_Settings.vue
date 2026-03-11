@@ -1,4 +1,4 @@
-<!-- admin_Settings.vue - 完整持久化版本（包含完整密码功能） -->
+<!-- admin_Settings.vue - 完整修复版（保存后自动刷新） -->
 <template>
   <div class="settings">
     <el-row :gutter="20">
@@ -821,7 +821,7 @@ const saveGeneralSettings = async () => {
       timezone: generalSettings.value.timezone,
     });
     ElMessage.success("通用设置已保存");
-    await loadAllSettings();
+    await loadAllSettings(); // ✅ 重新加载数据
   } catch (error) {
     console.error("保存通用设置失败:", error);
     ElMessage.error(
@@ -848,8 +848,8 @@ const saveCleanupSettings = async () => {
       cleanup_time: cleanupTimeStr, // 添加清理时间
     });
     ElMessage.success("清理策略已保存");
-    await loadAllSettings();
-    await loadCleanupStatus();
+    await loadAllSettings(); // ✅ 重新加载数据
+    await loadCleanupStatus(); // 刷新清理状态
   } catch (error) {
     console.error("保存清理策略失败:", error);
     ElMessage.error(
@@ -871,7 +871,7 @@ const saveStorageSettings = async () => {
       thumbnail_quality: storageSettings.value.thumbnailQuality,
     });
     ElMessage.success("存储设置已保存");
-    await loadAllSettings();
+    await loadAllSettings(); // ✅ 重新加载数据
   } catch (error) {
     console.error("保存存储设置失败:", error);
     ElMessage.error(
@@ -897,7 +897,7 @@ const saveBackupSettings = async () => {
       keep_count: backupSettings.value.keepCount,
     });
     ElMessage.success("备份设置已保存");
-    await loadAllSettings();
+    await loadAllSettings(); // ✅ 重新加载数据
   } catch (error) {
     console.error("保存备份设置失败:", error);
     ElMessage.error(
@@ -916,7 +916,7 @@ const saveSecuritySettings = async () => {
       jwt_expire_minutes: securitySettings.value.jwtExpireMinutes,
     });
     ElMessage.success("安全设置已保存");
-    await loadAllSettings();
+    await loadAllSettings(); // ✅ 重新加载数据
   } catch (error) {
     console.error("保存安全设置失败:", error);
     ElMessage.error(
@@ -940,7 +940,7 @@ const saveNotificationSettings = async () => {
       events: notificationSettings.value.events,
     });
     ElMessage.success("通知设置已保存");
-    await loadAllSettings();
+    await loadAllSettings(); // ✅ 重新加载数据
   } catch (error) {
     console.error("保存通知设置失败:", error);
     ElMessage.error(
@@ -955,17 +955,16 @@ const saveNotificationSettings = async () => {
 const saveAllSettings = async () => {
   savingAll.value = true;
   try {
-    await Promise.all(
-      [
-        saveGeneralSettings(),
-        saveCleanupSettings(),
-        saveStorageSettings(),
-        saveBackupSettings(),
-        saveSecuritySettings(),
-        saveNotificationSettings(),
-      ].map((p) => p.catch((e) => console.error(e))),
-    );
+    await Promise.all([
+      saveGeneralSettings(),
+      saveCleanupSettings(),
+      saveStorageSettings(),
+      saveBackupSettings(),
+      saveSecuritySettings(),
+      saveNotificationSettings(),
+    ].map((p) => p.catch((e) => console.error(e))));
     ElMessage.success("所有设置已保存");
+    await loadAllSettings(); // ✅ 重新加载数据
   } catch (error) {
     console.error("保存设置失败:", error);
   } finally {
