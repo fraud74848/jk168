@@ -297,3 +297,29 @@ class Activity(Base):
             "ip_address": self.ip_address,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# 系统设置表
+class SystemConfig(Base):
+    """系统配置表 - 存储所有动态配置"""
+
+    __tablename__ = "system_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(50), unique=True, nullable=False, index=True)
+    value = Column(JSON, nullable=False)
+    description = Column(String(200))
+    category = Column(
+        String(50), index=True
+    )  # general, cleanup, storage, security, notification
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    def to_dict(self):
+        return {
+            "key": self.key,
+            "value": self.value,
+            "description": self.description,
+            "category": self.category,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

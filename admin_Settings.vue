@@ -1,3 +1,4 @@
+<!-- admin_Settings.vue - 完整持久化版本（包含完整密码功能） -->
 <template>
   <div class="settings">
     <el-row :gutter="20">
@@ -84,6 +85,17 @@
                   />
                 </el-select>
               </el-form-item>
+
+              <!-- 通用设置的保存按钮 -->
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  @click="saveGeneralSettings"
+                  :loading="savingGeneral"
+                >
+                  保存通用设置
+                </el-button>
+              </el-form-item>
             </el-form>
           </div>
 
@@ -124,10 +136,23 @@
 
               <el-form-item label="清理时间">
                 <el-time-picker
-                  v-model="cleanupSettings.time"
+                  v-model="cleanupSettings.cleanupTime"
                   format="HH:mm"
                   placeholder="选择清理时间"
+                  :disabled="!cleanupSettings.enabled"
                 />
+                <span class="help-text">每天固定时间执行清理</span>
+              </el-form-item>
+
+              <!-- 清理策略的保存按钮 -->
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  @click="saveCleanupSettings"
+                  :loading="savingCleanup"
+                >
+                  保存清理策略
+                </el-button>
               </el-form-item>
 
               <el-form-item label="立即清理">
@@ -146,6 +171,20 @@
 
             <h4>当前清理状态</h4>
             <el-descriptions :column="2" border>
+              <el-descriptions-item label="自动清理状态">
+                <el-tag :type="cleanupStatus.enabled ? 'success' : 'info'">
+                  {{ cleanupStatus.enabled ? "已启用" : "已禁用" }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="保留时间">
+                {{ cleanupStatus.retention_hours }}小时
+              </el-descriptions-item>
+              <el-descriptions-item label="清理间隔">
+                {{ cleanupStatus.interval_hours }}小时
+              </el-descriptions-item>
+              <el-descriptions-item label="清理时间">
+                {{ cleanupStatus.cleanup_time || "未设置" }}
+              </el-descriptions-item>
               <el-descriptions-item label="上次清理时间">
                 {{ cleanupStatus.last_cleanup || "从未" }}
               </el-descriptions-item>
@@ -214,6 +253,17 @@
                   show-input
                 />
               </el-form-item>
+
+              <!-- 存储设置的保存按钮 -->
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  @click="saveStorageSettings"
+                  :loading="savingStorage"
+                >
+                  保存存储设置
+                </el-button>
+              </el-form-item>
             </el-form>
           </div>
 
@@ -244,7 +294,7 @@
 
               <el-form-item label="备份时间">
                 <el-time-picker
-                  v-model="backupSettings.time"
+                  v-model="backupSettings.backupTime"
                   format="HH:mm"
                   placeholder="选择备份时间"
                 />
@@ -256,6 +306,17 @@
                   :min="1"
                   :max="30"
                 />
+              </el-form-item>
+
+              <!-- 备份设置的保存按钮 -->
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  @click="saveBackupSettings"
+                  :loading="savingBackup"
+                >
+                  保存备份设置
+                </el-button>
               </el-form-item>
 
               <el-form-item label="立即备份">
@@ -294,18 +355,21 @@
             <h3 class="section-title">安全设置</h3>
 
             <el-tabs type="border-card">
+              <!-- 管理员密码 -->
               <el-tab-pane label="管理员密码">
                 <el-form
                   :model="passwordForm"
                   label-width="100px"
                   :rules="passwordRules"
                   ref="passwordFormRef"
+                  status-icon
                 >
                   <el-form-item label="当前密码" prop="currentPassword">
                     <el-input
                       v-model="passwordForm.currentPassword"
                       type="password"
                       show-password
+                      placeholder="请输入当前密码"
                     />
                   </el-form-item>
 
@@ -314,7 +378,9 @@
                       v-model="passwordForm.newPassword"
                       type="password"
                       show-password
+                      placeholder="请输入新密码（至少6位）"
                     />
+                    <span class="help-text">密码长度至少6位</span>
                   </el-form-item>
 
                   <el-form-item label="确认密码" prop="confirmPassword">
@@ -322,17 +388,23 @@
                       v-model="passwordForm.confirmPassword"
                       type="password"
                       show-password
+                      placeholder="请再次输入新密码"
                     />
                   </el-form-item>
 
                   <el-form-item>
-                    <el-button type="primary" @click="changePassword"
-                      >修改密码</el-button
+                    <el-button
+                      type="primary"
+                      @click="changePassword"
+                      :loading="changingPassword"
                     >
+                      修改密码
+                    </el-button>
                   </el-form-item>
                 </el-form>
               </el-tab-pane>
 
+              <!-- 登录日志 -->
               <el-tab-pane label="登录日志">
                 <el-table :data="loginLogs" stripe>
                   <el-table-column prop="time" label="时间" width="180" />
@@ -355,6 +427,7 @@
                 </el-table>
               </el-tab-pane>
 
+              <!-- API密钥 -->
               <el-tab-pane label="API密钥">
                 <el-form :model="apiKeyForm" label-width="120px">
                   <el-form-item label="当前密钥">
@@ -365,13 +438,41 @@
                     </el-input>
                   </el-form-item>
 
-                  <el-form-item label="生成新密钥">
-                    <el-button type="warning" @click="regenerateApiKey"
-                      >重新生成</el-button
+                  <el-form-item label="JWT过期时间">
+                    <el-input-number
+                      v-model="securitySettings.jwtExpireMinutes"
+                      :min="30"
+                      :max="1440"
+                      :step="30"
+                    />
+                    <span class="unit">分钟</span>
+                    <span class="help-text"
+                      >Token有效期，建议480分钟（8小时）</span
                     >
+                  </el-form-item>
+
+                  <el-form-item label="生成新密钥">
+                    <el-button
+                      type="warning"
+                      @click="regenerateApiKey"
+                      :loading="regeneratingKey"
+                    >
+                      重新生成
+                    </el-button>
                     <span class="help-text"
                       >生成后将立即生效，旧密钥将失效</span
                     >
+                  </el-form-item>
+
+                  <!-- 安全设置的保存按钮 -->
+                  <el-form-item>
+                    <el-button
+                      type="primary"
+                      @click="saveSecuritySettings"
+                      :loading="savingSecurity"
+                    >
+                      保存JWT设置
+                    </el-button>
                   </el-form-item>
                 </el-form>
               </el-tab-pane>
@@ -441,15 +542,29 @@
                   v-model="notificationSettings.events.backupComplete"
                 />
               </el-form-item>
+
+              <!-- 通知设置的保存按钮 -->
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  @click="saveNotificationSettings"
+                  :loading="savingNotification"
+                >
+                  保存通知设置
+                </el-button>
+              </el-form-item>
             </el-form>
           </div>
 
           <!-- 底部按钮 -->
           <el-divider />
-
           <div class="form-actions">
-            <el-button type="primary" @click="saveSettings" :loading="saving">
-              保存设置
+            <el-button
+              type="primary"
+              @click="saveAllSettings"
+              :loading="savingAll"
+            >
+              保存所有设置
             </el-button>
             <el-button @click="resetSettings">重置</el-button>
           </div>
@@ -471,12 +586,30 @@ import {
   Message,
 } from "@element-plus/icons-vue";
 import { cleanupApi } from "./admin_api";
+import api from "./admin_api";
 import dayjs from "dayjs";
+import { useRouter } from "vue-router";
+import { useUserStore } from "./admin_stores";
+
+const router = useRouter();
+const userStore = useUserStore();
 
 const activeMenu = ref("general");
-const saving = ref(false);
+const savingAll = ref(false);
 const cleaning = ref(false);
 const backing = ref(false);
+
+// 密码修改相关
+const changingPassword = ref(false);
+const regeneratingKey = ref(false);
+
+// 各分类的保存状态
+const savingGeneral = ref(false);
+const savingCleanup = ref(false);
+const savingStorage = ref(false);
+const savingBackup = ref(false);
+const savingSecurity = ref(false);
+const savingNotification = ref(false);
 
 // 通用设置
 const generalSettings = ref({
@@ -487,15 +620,19 @@ const generalSettings = ref({
   timezone: "Asia/Shanghai",
 });
 
-// 清理设置
+// 清理设置（包含清理时间）
 const cleanupSettings = ref({
   enabled: true,
   retentionHours: 4,
   interval: 6,
-  time: new Date(),
+  cleanupTime: new Date(), // 清理时间
 });
 
 const cleanupStatus = ref({
+  enabled: true,
+  retention_hours: 4,
+  interval_hours: 6,
+  cleanup_time: null,
   last_cleanup: null,
   pending_cleanup: 0,
   pending_size_mb: 0,
@@ -516,11 +653,16 @@ const storageColor = computed(() => {
   return "#ff4d4f";
 });
 
-// 备份设置
+// 安全设置
+const securitySettings = ref({
+  jwtExpireMinutes: 480,
+});
+
+// 备份设置（包含备份时间）
 const backupSettings = ref({
   enabled: true,
   frequency: "daily",
-  time: new Date(),
+  backupTime: new Date(), // 备份时间
   keepCount: 7,
 });
 
@@ -594,6 +736,243 @@ const notificationSettings = ref({
   },
 });
 
+// ==================== API 调用函数 ====================
+
+// 加载所有设置
+const loadAllSettings = async () => {
+  try {
+    const res = await api.get("/settings/all");
+
+    // 更新通用设置
+    if (res.general) {
+      generalSettings.value = {
+        systemName: res.general.system_name || generalSettings.value.systemName,
+        defaultInterval:
+          res.general.default_interval || generalSettings.value.defaultInterval,
+        defaultFormat:
+          res.general.default_format || generalSettings.value.defaultFormat,
+        defaultQuality:
+          res.general.default_quality || generalSettings.value.defaultQuality,
+        timezone: res.general.timezone || generalSettings.value.timezone,
+      };
+    }
+
+    // 更新清理设置（包含清理时间）
+    if (res.cleanup) {
+      cleanupSettings.value = {
+        enabled: res.cleanup.enabled ?? cleanupSettings.value.enabled,
+        retentionHours:
+          res.cleanup.retention_hours || cleanupSettings.value.retentionHours,
+        interval: res.cleanup.interval_hours || cleanupSettings.value.interval,
+        cleanupTime: res.cleanup.cleanup_time
+          ? new Date(`1970-01-01T${res.cleanup.cleanup_time}:00`)
+          : cleanupSettings.value.cleanupTime,
+      };
+    }
+
+    // 更新存储设置
+    if (res.storage) {
+      storageSettings.value = {
+        path: res.storage.path || storageSettings.value.path,
+        maxSize: res.storage.max_size_gb || storageSettings.value.maxSize,
+        thumbnailSize:
+          res.storage.thumbnail_size || storageSettings.value.thumbnailSize,
+        thumbnailQuality:
+          res.storage.thumbnail_quality ||
+          storageSettings.value.thumbnailQuality,
+      };
+    }
+
+    // 更新安全设置
+    if (res.security) {
+      securitySettings.value = {
+        jwtExpireMinutes:
+          res.security.jwt_expire_minutes ||
+          securitySettings.value.jwtExpireMinutes,
+      };
+    }
+
+    // 更新备份设置
+    if (res.backup) {
+      backupSettings.value = {
+        enabled: res.backup.enabled ?? backupSettings.value.enabled,
+        frequency: res.backup.frequency || backupSettings.value.frequency,
+        backupTime: res.backup.backup_time
+          ? new Date(`1970-01-01T${res.backup.backup_time}:00`)
+          : backupSettings.value.backupTime,
+        keepCount: res.backup.keep_count || backupSettings.value.keepCount,
+      };
+    }
+  } catch (error) {
+    console.error("加载设置失败:", error);
+    ElMessage.error("加载设置失败");
+  }
+};
+
+// 保存通用设置
+const saveGeneralSettings = async () => {
+  savingGeneral.value = true;
+  try {
+    await api.post("/settings/general", {
+      system_name: generalSettings.value.systemName,
+      default_interval: generalSettings.value.defaultInterval,
+      default_format: generalSettings.value.defaultFormat,
+      default_quality: generalSettings.value.defaultQuality,
+      timezone: generalSettings.value.timezone,
+    });
+    ElMessage.success("通用设置已保存");
+    await loadAllSettings();
+  } catch (error) {
+    console.error("保存通用设置失败:", error);
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.detail || "未知错误"),
+    );
+  } finally {
+    savingGeneral.value = false;
+  }
+};
+
+// 保存清理策略（包含清理时间）
+const saveCleanupSettings = async () => {
+  savingCleanup.value = true;
+  try {
+    // 格式化清理时间
+    const cleanupTimeStr = cleanupSettings.value.cleanupTime
+      ? dayjs(cleanupSettings.value.cleanupTime).format("HH:mm")
+      : null;
+
+    await api.post("/settings/cleanup", {
+      enabled: cleanupSettings.value.enabled,
+      retention_hours: cleanupSettings.value.retentionHours,
+      interval_hours: cleanupSettings.value.interval,
+      cleanup_time: cleanupTimeStr, // 添加清理时间
+    });
+    ElMessage.success("清理策略已保存");
+    await loadAllSettings();
+    await loadCleanupStatus();
+  } catch (error) {
+    console.error("保存清理策略失败:", error);
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.detail || "未知错误"),
+    );
+  } finally {
+    savingCleanup.value = false;
+  }
+};
+
+// 保存存储设置
+const saveStorageSettings = async () => {
+  savingStorage.value = true;
+  try {
+    await api.post("/settings/storage", {
+      path: storageSettings.value.path,
+      max_size_gb: storageSettings.value.maxSize,
+      thumbnail_size: storageSettings.value.thumbnailSize,
+      thumbnail_quality: storageSettings.value.thumbnailQuality,
+    });
+    ElMessage.success("存储设置已保存");
+    await loadAllSettings();
+  } catch (error) {
+    console.error("保存存储设置失败:", error);
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.detail || "未知错误"),
+    );
+  } finally {
+    savingStorage.value = false;
+  }
+};
+
+// 保存备份设置（包含备份时间）
+const saveBackupSettings = async () => {
+  savingBackup.value = true;
+  try {
+    const backupTimeStr = backupSettings.value.backupTime
+      ? dayjs(backupSettings.value.backupTime).format("HH:mm")
+      : null;
+
+    await api.post("/settings/backup", {
+      enabled: backupSettings.value.enabled,
+      frequency: backupSettings.value.frequency,
+      backup_time: backupTimeStr,
+      keep_count: backupSettings.value.keepCount,
+    });
+    ElMessage.success("备份设置已保存");
+    await loadAllSettings();
+  } catch (error) {
+    console.error("保存备份设置失败:", error);
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.detail || "未知错误"),
+    );
+  } finally {
+    savingBackup.value = false;
+  }
+};
+
+// 保存安全设置
+const saveSecuritySettings = async () => {
+  savingSecurity.value = true;
+  try {
+    await api.post("/settings/security", {
+      jwt_expire_minutes: securitySettings.value.jwtExpireMinutes,
+    });
+    ElMessage.success("安全设置已保存");
+    await loadAllSettings();
+  } catch (error) {
+    console.error("保存安全设置失败:", error);
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.detail || "未知错误"),
+    );
+  } finally {
+    savingSecurity.value = false;
+  }
+};
+
+// 保存通知设置
+const saveNotificationSettings = async () => {
+  savingNotification.value = true;
+  try {
+    await api.post("/settings/notification", {
+      enabled: notificationSettings.value.enabled,
+      methods: notificationSettings.value.methods,
+      smtp_server: notificationSettings.value.smtpServer,
+      from_email: notificationSettings.value.fromEmail,
+      to_email: notificationSettings.value.toEmail,
+      events: notificationSettings.value.events,
+    });
+    ElMessage.success("通知设置已保存");
+    await loadAllSettings();
+  } catch (error) {
+    console.error("保存通知设置失败:", error);
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.detail || "未知错误"),
+    );
+  } finally {
+    savingNotification.value = false;
+  }
+};
+
+// 保存所有设置
+const saveAllSettings = async () => {
+  savingAll.value = true;
+  try {
+    await Promise.all(
+      [
+        saveGeneralSettings(),
+        saveCleanupSettings(),
+        saveStorageSettings(),
+        saveBackupSettings(),
+        saveSecuritySettings(),
+        saveNotificationSettings(),
+      ].map((p) => p.catch((e) => console.error(e))),
+    );
+    ElMessage.success("所有设置已保存");
+  } catch (error) {
+    console.error("保存设置失败:", error);
+  } finally {
+    savingAll.value = false;
+  }
+};
+
 // 菜单选择
 const handleMenuSelect = (index) => {
   activeMenu.value = index;
@@ -614,9 +993,12 @@ const manualCleanup = async () => {
     try {
       const res = await cleanupApi.manualCleanup();
       ElMessage.success(res.message);
-      loadCleanupStatus();
+      await loadCleanupStatus();
     } catch (error) {
       console.error("清理失败:", error);
+      ElMessage.error(
+        "清理失败: " + (error.response?.data?.detail || "未知错误"),
+      );
     } finally {
       cleaning.value = false;
     }
@@ -626,7 +1008,8 @@ const manualCleanup = async () => {
 // 加载清理状态
 const loadCleanupStatus = async () => {
   try {
-    cleanupStatus.value = await cleanupApi.getCleanupStatus();
+    const status = await cleanupApi.getCleanupStatus();
+    cleanupStatus.value = status;
   } catch (error) {
     console.error("加载清理状态失败:", error);
   }
@@ -653,18 +1036,44 @@ const deleteBackup = (row) => {
   });
 };
 
+// ==================== 密码相关功能 ====================
+
 // 修改密码
 const changePassword = async () => {
   if (!passwordFormRef.value) return;
 
-  await passwordFormRef.value.validate((valid) => {
+  await passwordFormRef.value.validate(async (valid) => {
     if (valid) {
-      ElMessage.success("密码修改成功");
-      passwordForm.value = {
-        currentPassword: "",
-        newPassword: "",
-        confirmPassword: "",
-      };
+      changingPassword.value = true;
+      try {
+        // 调用后端修改密码API
+        await api.post("/auth/change-password", {
+          current_password: passwordForm.value.currentPassword,
+          new_password: passwordForm.value.newPassword,
+        });
+
+        ElMessage.success("密码修改成功，请使用新密码重新登录");
+
+        // 清空表单
+        passwordForm.value = {
+          currentPassword: "",
+          newPassword: "",
+          confirmPassword: "",
+        };
+
+        // 3秒后退出登录，让用户重新登录
+        setTimeout(() => {
+          userStore.logout();
+          router.push("/login");
+        }, 3000);
+      } catch (error) {
+        console.error("修改密码失败:", error);
+        ElMessage.error(
+          error.response?.data?.detail || "密码修改失败，请检查当前密码",
+        );
+      } finally {
+        changingPassword.value = false;
+      }
     }
   });
 };
@@ -678,27 +1087,27 @@ const copyApiKey = () => {
 // 重新生成API密钥
 const regenerateApiKey = () => {
   ElMessageBox.confirm(
-    "重新生成API密钥后，旧密钥将立即失效，确定要继续吗？",
+    "重新生成API密钥后，旧密钥将立即失效，所有使用旧密钥的应用都需要更新。确定要继续吗？",
     "确认重新生成",
     {
       confirmButtonText: "确定",
       cancelButtonText: "取消",
       type: "warning",
     },
-  ).then(() => {
-    apiKeyForm.value.currentKey =
-      "sk-" + Math.random().toString(36).substring(2);
-    ElMessage.success("新密钥已生成");
+  ).then(async () => {
+    regeneratingKey.value = true;
+    try {
+      // 调用后端重新生成密钥API
+      const res = await api.post("/auth/regenerate-api-key");
+      apiKeyForm.value.currentKey = res.api_key;
+      ElMessage.success("新密钥已生成");
+    } catch (error) {
+      console.error("重新生成密钥失败:", error);
+      ElMessage.error("生成失败");
+    } finally {
+      regeneratingKey.value = false;
+    }
   });
-};
-
-// 保存设置
-const saveSettings = () => {
-  saving.value = true;
-  setTimeout(() => {
-    ElMessage.success("设置已保存");
-    saving.value = false;
-  }, 1000);
 };
 
 // 重置设置
@@ -708,11 +1117,13 @@ const resetSettings = () => {
     cancelButtonText: "取消",
     type: "warning",
   }).then(() => {
+    loadAllSettings();
     ElMessage.success("设置已重置");
   });
 };
 
 onMounted(() => {
+  loadAllSettings();
   loadCleanupStatus();
 });
 </script>
@@ -779,5 +1190,6 @@ onMounted(() => {
 
 .form-actions {
   text-align: center;
+  margin-top: 20px;
 }
 </style>

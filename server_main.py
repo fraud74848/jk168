@@ -35,6 +35,7 @@ import asyncio
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
+from pydantic import BaseModel
 
 import server_models as models
 import server_schemas as schemas
@@ -45,6 +46,8 @@ from server_auth import (
     create_access_token,
     get_current_user,
     get_current_active_user,
+    get_current_admin_user,
+    verify_password,
 )
 from server_cleanup import DataCleanup
 from server_config import Config
@@ -1611,6 +1614,71 @@ def process_batch_upload(
         logger.error(f"批量处理失败: {e}")
 
 
+class ChangePasswordSchema(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class RegenerateApiKeySchema(BaseModel):
+    pass  # 不需要参数
+
+
+@app.post("/api/auth/change-password", tags=["认证"])
+def change_password(
+    password_data: ChangePasswordSchema,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """修改当前用户密码"""
+    # 验证当前密码
+    if not verify_password(password_data.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码错误"
+        )
+
+    # 验证新密码长度
+    if len(password_data.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="新密码至少需要6个字符"
+        )
+
+    # 更新密码
+    current_user.password_hash = get_password_hash(password_data.new_password)
+    db.commit()
+
+    logger.info(f"用户密码已修改: {current_user.username}")
+
+    return {"message": "密码修改成功"}
+
+
+@app.post("/api/auth/regenerate-api-key", tags=["认证"])
+def regenerate_api_key(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    """重新生成API密钥"""
+    import secrets
+
+    # 生成新的API密钥
+    new_api_key = f"sk-" + secrets.token_urlsafe(32)
+
+    # 这里需要根据你的实际存储方式保存API密钥
+    # 例如保存到数据库的 SystemConfig 表
+    from server_config_manager import set_config
+
+    set_config(
+        key="api_key",
+        value=new_api_key,
+        category="security",
+        description="API密钥",
+        user_id=current_user.id,
+    )
+
+    logger.info(f"API密钥已重新生成: {current_user.username}")
+
+    return {"api_key": new_api_key}
+
+
 # ==================== 静态文件服务 ====================
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -1623,9 +1691,7 @@ import os
 screenshots_path = Path("/data/screenshots")
 if screenshots_path.exists():
     app.mount(
-        "/screenshots", 
-        StaticFiles(directory="/data/screenshots"), 
-        name="screenshots"
+        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
     )
     logger.info(f"✅ 截图目录已挂载: /data/screenshots")
 
@@ -1657,6 +1723,7 @@ if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory="assets"), name="assets")
     logger.info(f"✅ 静态资源目录已挂载: /assets")
 
+
 # 4. 处理所有前端路由（关键修复）
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
@@ -1666,25 +1733,38 @@ async def serve_frontend(full_path: str):
     - 如果是静态资源文件，直接返回
     - 其他所有路径都返回 index.html
     """
-    
+
     # 跳过API路径
     if full_path.startswith("api/") or full_path == "api":
         return {"error": "API endpoint not found"}, 404
-    
+
     # 检查是否是静态资源文件（有扩展名的）
-    static_extensions = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', 
-                         '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot']
-    
+    static_extensions = [
+        ".js",
+        ".css",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".eot",
+    ]
+
     if any(full_path.endswith(ext) for ext in static_extensions):
         file_path = static_dir / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
-    
+
     # 其他所有路径都返回 index.html
     if index_path.exists():
         return FileResponse(index_path)
-    
+
     return {"error": "Frontend not found"}, 404
+
 
 # 5. 根路径处理
 @app.get("/")
