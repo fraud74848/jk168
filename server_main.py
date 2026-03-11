@@ -171,6 +171,306 @@ async def health_check():
     return health_status
 
 
+# ==================== 系统设置接口 ====================
+
+
+class GeneralConfigSchema(BaseModel):
+    system_name: str
+    default_interval: int
+    default_format: str
+    default_quality: int
+    timezone: str
+
+
+class CleanupConfigSchema(BaseModel):
+    enabled: bool
+    retention_hours: int
+    interval_hours: int
+    cleanup_time: Optional[str] = None
+
+
+class StorageConfigSchema(BaseModel):
+    path: str
+    max_size_gb: int
+    thumbnail_size: int
+    thumbnail_quality: int
+
+
+class SecurityConfigSchema(BaseModel):
+    jwt_expire_minutes: int
+
+
+class NotificationConfigSchema(BaseModel):
+    enabled: bool
+    methods: List[str]
+    smtp_server: Optional[str] = None
+    from_email: Optional[str] = None
+    to_email: Optional[str] = None
+    events: dict
+
+
+class BackupConfigSchema(BaseModel):
+    enabled: bool
+    frequency: str
+    backup_time: Optional[str] = None
+    keep_count: int
+
+
+@app.get("/api/settings/all", tags=["系统设置"])
+def get_all_settings(
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """获取所有系统设置"""
+    from server_config_manager import get_config
+
+    return {
+        "general": {
+            "system_name": get_config("system_name", "员工监控系统"),
+            "default_interval": get_config("screenshot_interval", 60),
+            "default_format": get_config("screenshot_format", "webp"),
+            "default_quality": get_config("screenshot_quality", 80),
+            "timezone": get_config("timezone", "Asia/Shanghai"),
+        },
+        "cleanup": {
+            "enabled": get_config("auto_cleanup_enabled", True),
+            "retention_hours": get_config("screenshot_retention_hours", 4),
+            "interval_hours": get_config("cleanup_interval", 21600) / 3600,
+            "cleanup_time": get_config("cleanup_time", None),
+        },
+        "storage": {
+            "path": get_config("screenshot_dir", "/data/screenshots"),
+            "max_size_gb": get_config("max_storage_gb", 100),
+            "thumbnail_size": get_config("thumbnail_size", 320),
+            "thumbnail_quality": get_config("thumbnail_quality", 75),
+        },
+        "security": {
+            "jwt_expire_minutes": get_config("jwt_expire_minutes", 480),
+        },
+        "backup": {
+            "enabled": get_config("backup_enabled", True),
+            "frequency": get_config("backup_frequency", "daily"),
+            "backup_time": get_config("backup_time", None),
+            "keep_count": get_config("backup_keep_count", 7),
+        },
+        "notification": {
+            "enabled": get_config("notification_enabled", True),
+            "methods": get_config("notification_methods", ["email"]),
+            "smtp_server": get_config("smtp_server", ""),
+            "from_email": get_config("from_email", ""),
+            "to_email": get_config("to_email", ""),
+            "events": get_config(
+                "notification_events",
+                {
+                    "clientRegister": True,
+                    "clientOffline": True,
+                    "lowStorage": True,
+                    "backupComplete": True,
+                },
+            ),
+        },
+    }
+
+
+@app.post("/api/settings/general", tags=["系统设置"])
+def update_general_settings(
+    config: GeneralConfigSchema,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    """更新通用设置"""
+    from server_config_manager import set_config
+
+    set_config(
+        "system_name", config.system_name, "general", "系统名称", current_user.id
+    )
+    set_config(
+        "screenshot_interval",
+        config.default_interval,
+        "general",
+        "默认截图间隔",
+        current_user.id,
+    )
+    set_config(
+        "screenshot_format",
+        config.default_format,
+        "general",
+        "默认图片格式",
+        current_user.id,
+    )
+    set_config(
+        "screenshot_quality",
+        config.default_quality,
+        "general",
+        "默认图片质量",
+        current_user.id,
+    )
+    set_config("timezone", config.timezone, "general", "时区", current_user.id)
+
+    logger.info(f"通用设置已更新: {config.dict()} 更新者: {current_user.username}")
+    return {"message": "通用设置已保存"}
+
+
+@app.post("/api/settings/cleanup", tags=["系统设置"])
+def update_cleanup_settings(
+    config: CleanupConfigSchema,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    """更新清理策略"""
+    from server_config_manager import set_config
+
+    set_config(
+        "auto_cleanup_enabled",
+        config.enabled,
+        "cleanup",
+        "自动清理开关",
+        current_user.id,
+    )
+    set_config(
+        "screenshot_retention_hours",
+        config.retention_hours,
+        "cleanup",
+        "截图保留时间",
+        current_user.id,
+    )
+    set_config(
+        "cleanup_interval",
+        int(config.interval_hours * 3600),
+        "cleanup",
+        "清理间隔",
+        current_user.id,
+    )
+    if config.cleanup_time:
+        set_config(
+            "cleanup_time", config.cleanup_time, "cleanup", "清理时间", current_user.id
+        )
+
+    logger.info(f"清理策略已更新: {config.dict()} 更新者: {current_user.username}")
+    return {"message": "清理策略已保存"}
+
+
+@app.post("/api/settings/storage", tags=["系统设置"])
+def update_storage_settings(
+    config: StorageConfigSchema,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    """更新存储设置"""
+    from server_config_manager import set_config
+
+    set_config("screenshot_dir", config.path, "storage", "存储路径", current_user.id)
+    set_config(
+        "max_storage_gb", config.max_size_gb, "storage", "最大存储空间", current_user.id
+    )
+    set_config(
+        "thumbnail_size",
+        config.thumbnail_size,
+        "storage",
+        "缩略图大小",
+        current_user.id,
+    )
+    set_config(
+        "thumbnail_quality",
+        config.thumbnail_quality,
+        "storage",
+        "缩略图质量",
+        current_user.id,
+    )
+
+    logger.info(f"存储设置已更新: {config.dict()} 更新者: {current_user.username}")
+    return {"message": "存储设置已保存"}
+
+
+@app.post("/api/settings/security", tags=["系统设置"])
+def update_security_settings(
+    config: SecurityConfigSchema,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    """更新安全设置"""
+    from server_config_manager import set_config
+
+    set_config(
+        "jwt_expire_minutes",
+        config.jwt_expire_minutes,
+        "security",
+        "JWT过期时间",
+        current_user.id,
+    )
+
+    logger.info(f"安全设置已更新: {config.dict()} 更新者: {current_user.username}")
+    return {"message": "安全设置已保存"}
+
+
+@app.post("/api/settings/backup", tags=["系统设置"])
+def update_backup_settings(
+    config: BackupConfigSchema,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    """更新备份设置"""
+    from server_config_manager import set_config
+
+    set_config(
+        "backup_enabled", config.enabled, "backup", "自动备份开关", current_user.id
+    )
+    set_config(
+        "backup_frequency", config.frequency, "backup", "备份频率", current_user.id
+    )
+    if config.backup_time:
+        set_config(
+            "backup_time", config.backup_time, "backup", "备份时间", current_user.id
+        )
+    set_config(
+        "backup_keep_count", config.keep_count, "backup", "保留备份数", current_user.id
+    )
+
+    logger.info(f"备份设置已更新: {config.dict()} 更新者: {current_user.username}")
+    return {"message": "备份设置已保存"}
+
+
+@app.post("/api/settings/notification", tags=["系统设置"])
+def update_notification_settings(
+    config: NotificationConfigSchema,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    """更新通知设置"""
+    from server_config_manager import set_config
+
+    set_config(
+        "notification_enabled",
+        config.enabled,
+        "notification",
+        "通知开关",
+        current_user.id,
+    )
+    set_config(
+        "notification_methods",
+        config.methods,
+        "notification",
+        "通知方式",
+        current_user.id,
+    )
+    set_config(
+        "smtp_server", config.smtp_server, "notification", "邮件服务器", current_user.id
+    )
+    set_config(
+        "from_email", config.from_email, "notification", "发件人邮箱", current_user.id
+    )
+    set_config("to_email", config.to_email, "notification", "接收邮箱", current_user.id)
+    set_config(
+        "notification_events",
+        config.events,
+        "notification",
+        "通知事件",
+        current_user.id,
+    )
+
+    logger.info(f"通知设置已更新: {config.dict()} 更新者: {current_user.username}")
+    return {"message": "通知设置已保存"}
+
+
 # ==================== 认证接口 ====================
 
 
