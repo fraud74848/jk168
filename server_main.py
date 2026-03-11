@@ -233,6 +233,8 @@ async def get_current_user_info(
 
 
 # ==================== 客户端接口 ====================
+
+
 @app.post("/api/client/register", response_model=schemas.Client, tags=["客户端"])
 async def register_client(
     client_info: schemas.ClientCreate,
@@ -253,6 +255,13 @@ async def register_client(
         )
         .first()
     )
+
+    # ===== 新增：从客户端信息中获取姓名 =====
+    employee_name = None
+    if hasattr(client_info, "employee_name") and client_info.employee_name:
+        employee_name = client_info.employee_name
+        logger.info(f"客户端传入姓名: {employee_name}")
+    # ======================================
 
     if existing_client:
         for key, value in client_info.dict(exclude_unset=True).items():
@@ -278,10 +287,12 @@ async def register_client(
 
     if not employee:
         # ===== 修改：优先使用客户端传入的姓名 =====
-        if hasattr(client_info, "employee_name") and client_info.employee_name:
-            employee_name = client_info.employee_name
+        if employee_name:
+            # 使用用户输入的姓名
+            final_name = employee_name
         else:
-            employee_name = (
+            # 降级方案：使用计算机名和用户名组合
+            final_name = (
                 f"{client_info.computer_name} - {client_info.windows_user}"
                 if client_info.windows_user
                 else client_info.computer_name
@@ -289,14 +300,22 @@ async def register_client(
 
         employee = models.Employee(
             employee_id=employee_id,
-            name=employee_name,  # 使用用户输入的姓名
+            name=final_name,  # 使用用户输入的姓名
             computer_name=client_info.computer_name,
             windows_user=client_info.windows_user,
             department="自动注册",
             status="active",
         )
         db.add(employee)
-        logger.info(f"自动创建员工: {employee_id} 姓名: {employee_name}")
+        logger.info(f"自动创建员工: {employee_id} 姓名: {final_name}")
+    else:
+        # ===== 新增：如果员工已存在但姓名是默认值，可以更新为真实姓名 =====
+        if employee_name and (
+            not employee.name or employee.name.startswith(employee.computer_name)
+        ):
+            employee.name = employee_name
+            logger.info(f"更新员工姓名: {employee_id} -> {employee_name}")
+    # ============================================================
 
     # 创建客户端
     new_client = models.Client(

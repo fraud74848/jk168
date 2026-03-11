@@ -107,6 +107,7 @@ class ClientCreate(ClientBase):
     interval: Optional[int] = None
     quality: Optional[int] = None
     format: Optional[str] = None
+    employee_name: Optional[str] = None
     capabilities: Optional[List[str]] = []
 
 
