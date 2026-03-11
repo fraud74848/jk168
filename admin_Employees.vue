@@ -10,6 +10,7 @@
             :prefix-icon="Search"
             clearable
             @input="handleSearch"
+            @clear="handleSearch"
           />
         </el-col>
         <el-col :span="6">
@@ -17,7 +18,7 @@
             v-model="statusFilter"
             placeholder="状态筛选"
             clearable
-            @change="loadEmployees"
+            @change="handleFilterChange"
           >
             <el-option label="全部" value="" />
             <el-option label="在职" value="active" />
@@ -41,12 +42,12 @@
     <el-card class="table-card" shadow="hover">
       <el-table
         v-loading="loading"
-        :data="filteredEmployees"
+        :data="employees"
         stripe
         style="width: 100%"
         @row-click="handleRowClick"
       >
-        <el-table-column type="index" width="50" />
+        <el-table-column type="index" :index="getIndex" width="50" />
 
         <el-table-column label="员工" min-width="200">
           <template #default="{ row }">
@@ -62,7 +63,7 @@
                     >离职</el-tag
                   >
                 </div>
-                <div class="employee-id">{{ row.id }}</div>
+                <div class="employee-id">{{ row.employee_id || row.id }}</div>
               </div>
             </div>
           </template>
@@ -95,7 +96,6 @@
 
         <el-table-column label="最后活跃" width="180">
           <template #default="{ row }">
-            <!-- ===== 修改：使用统一的日期时间格式化函数 ===== -->
             {{ formatDateTime(row.last_active) }}
           </template>
         </el-table-column>
@@ -113,7 +113,7 @@
             <el-button
               link
               type="primary"
-              @click.stop="viewScreenshots(row.id)"
+              @click.stop="viewScreenshots(row.employee_id || row.id)"
             >
               <el-icon><Picture /></el-icon>截图
             </el-button>
@@ -127,28 +127,27 @@
         </el-table-column>
       </el-table>
 
-      <!-- 分页 - 修复 v-model 语法 -->
+      <!-- 分页 -->
       <div class="pagination">
         <el-pagination
-          v-model:currentPage="currentPage"
-          v-model:pageSize="pageSize"
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
           :page-sizes="[10, 20, 50, 100]"
           :total="total"
           layout="total, sizes, prev, pager, next, jumper"
-          @size-change="loadEmployees"
-          @current-change="loadEmployees"
+          @size-change="handleSizeChange"
+          @current-change="handleCurrentChange"
         />
       </div>
     </el-card>
 
-    <!-- 添加/编辑员工对话框 (保持不变) -->
+    <!-- 添加/编辑员工对话框 -->
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
       width="500px"
       @close="resetForm"
     >
-      <!-- ... 对话框内容完全保持不变 ... -->
       <el-form
         ref="formRef"
         :model="formData"
@@ -159,32 +158,36 @@
           <el-input
             v-model="formData.employee_id"
             :disabled="dialogType === 'edit'"
+            placeholder="请输入员工ID"
           />
         </el-form-item>
 
         <el-form-item label="姓名" prop="name">
-          <el-input v-model="formData.name" />
+          <el-input v-model="formData.name" placeholder="请输入姓名" />
         </el-form-item>
 
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="部门" prop="department">
-              <el-input v-model="formData.department" />
+              <el-input
+                v-model="formData.department"
+                placeholder="请输入部门"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="职位" prop="position">
-              <el-input v-model="formData.position" />
+              <el-input v-model="formData.position" placeholder="请输入职位" />
             </el-form-item>
           </el-col>
         </el-row>
 
         <el-form-item label="邮箱" prop="email">
-          <el-input v-model="formData.email" />
+          <el-input v-model="formData.email" placeholder="请输入邮箱" />
         </el-form-item>
 
         <el-form-item label="电话" prop="phone">
-          <el-input v-model="formData.phone" />
+          <el-input v-model="formData.phone" placeholder="请输入电话" />
         </el-form-item>
 
         <el-form-item label="状态" prop="status">
@@ -213,7 +216,7 @@ import {
 } from "./admin_timezone";
 // ============================
 
-import { ref, computed, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -239,9 +242,7 @@ const statusFilter = ref("");
 
 const dialogVisible = ref(false);
 const dialogType = ref("add");
-const dialogTitle = computed(() =>
-  dialogType.value === "add" ? "添加员工" : "编辑员工",
-);
+const dialogTitle = ref("添加员工");
 const submitting = ref(false);
 const formRef = ref(null);
 
@@ -256,30 +257,21 @@ const formData = ref({
 });
 
 const formRules = {
-  employee_id: [{ required: true, message: "请输入员工ID", trigger: "blur" }],
-  name: [{ required: true, message: "请输入姓名", trigger: "blur" }],
-  email: [{ type: "email", message: "请输入正确的邮箱地址", trigger: "blur" }],
+  employee_id: [
+    { required: true, message: "请输入员工ID", trigger: "blur" },
+    { min: 2, message: "员工ID至少2个字符", trigger: "blur" },
+  ],
+  name: [
+    { required: true, message: "请输入姓名", trigger: "blur" },
+    { min: 2, message: "姓名至少2个字符", trigger: "blur" },
+  ],
+  email: [
+    { type: "email", message: "请输入正确的邮箱地址", trigger: "blur" },
+    { required: false },
+  ],
 };
 
-// 过滤后的员工列表
-const filteredEmployees = computed(() => {
-  let filtered = employees.value;
-
-  // 搜索过滤
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase();
-    filtered = filtered.filter(
-      (emp) =>
-        emp.id.toLowerCase().includes(query) ||
-        emp.name.toLowerCase().includes(query) ||
-        (emp.department && emp.department.toLowerCase().includes(query)),
-    );
-  }
-
-  return filtered;
-});
-
-// ===== 修改：使用统一工具获取在线状态 =====
+// ===== 获取在线状态 =====
 const getOnlineStatus = (employee) => {
   if (employee.status !== "active") {
     return { type: "info", text: "离职" };
@@ -287,13 +279,18 @@ const getOnlineStatus = (employee) => {
   return getOnlineStatusUtil(employee.last_active, 10);
 };
 
-// ===== 修改：使用统一工具格式化日期时间 =====
+// ===== 格式化日期时间 =====
 const formatDateTime = (datetime) => {
   if (!datetime) return "从未";
   return formatDateTimeUtil(datetime, "YYYY-MM-DD HH:mm");
 };
 
-// 加载员工列表
+// ===== 计算表格索引 =====
+const getIndex = (index) => {
+  return (currentPage.value - 1) * pageSize.value + index + 1;
+};
+
+// ===== 加载员工列表（支持后端分页和搜索）=====
 const loadEmployees = async () => {
   loading.value = true;
   try {
@@ -302,57 +299,119 @@ const loadEmployees = async () => {
       limit: pageSize.value,
     };
 
+    // 添加搜索参数
+    if (searchQuery.value) {
+      params.search = searchQuery.value;
+    }
+
+    // 添加状态筛选
     if (statusFilter.value) {
-      if (statusFilter.value === "online" || statusFilter.value === "offline") {
-        // 在线/离线需要特殊处理
-        params.online_only = statusFilter.value === "online";
+      if (statusFilter.value === "online") {
+        params.online_only = true;
+      } else if (statusFilter.value === "offline") {
+        params.online_only = false;
       } else {
         params.status = statusFilter.value;
       }
     }
 
-    const data = await employeeApi.getEmployees(params);
-    employees.value = data;
-    total.value = data.length;
+    const response = await employeeApi.getEmployees(params);
+
+    // 处理返回数据（支持两种格式）
+    if (response && typeof response === "object") {
+      if (Array.isArray(response.items)) {
+        // 新格式：{ items: [], total: 100 }
+        employees.value = response.items;
+        total.value = response.total || 0;
+      } else if (Array.isArray(response)) {
+        // 旧格式：直接返回数组
+        employees.value = response;
+        total.value = response.length;
+      } else {
+        employees.value = [];
+        total.value = 0;
+      }
+    } else {
+      employees.value = [];
+      total.value = 0;
+    }
   } catch (error) {
     console.error("加载员工列表失败:", error);
     ElMessage.error("加载员工列表失败");
+    employees.value = [];
+    total.value = 0;
   } finally {
     loading.value = false;
   }
 };
 
-// 搜索处理
+// ===== 搜索处理（带防抖）=====
+let searchTimer = null;
 const handleSearch = () => {
-  currentPage.value = 1;
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    currentPage.value = 1;
+    loadEmployees();
+  }, 300);
 };
 
-// 刷新
-const refresh = () => {
+// ===== 筛选变化处理 =====
+const handleFilterChange = () => {
+  currentPage.value = 1;
   loadEmployees();
 };
 
-// 显示添加对话框
+// ===== 分页大小变化 =====
+const handleSizeChange = (val) => {
+  pageSize.value = val;
+  currentPage.value = 1;
+  loadEmployees();
+};
+
+// ===== 当前页变化 =====
+const handleCurrentChange = (val) => {
+  currentPage.value = val;
+  loadEmployees();
+};
+
+// ===== 刷新 =====
+const refresh = () => {
+  currentPage.value = 1;
+  loadEmployees();
+};
+
+// ===== 显示添加对话框 =====
 const showAddDialog = () => {
   dialogType.value = "add";
+  dialogTitle.value = "添加员工";
   resetForm();
   dialogVisible.value = true;
 };
 
-// 编辑员工
+// ===== 编辑员工 =====
 const editEmployee = (row) => {
   dialogType.value = "edit";
-  formData.value = { ...row };
+  dialogTitle.value = "编辑员工";
+  formData.value = {
+    employee_id: row.employee_id || row.id,
+    name: row.name,
+    department: row.department || "",
+    position: row.position || "",
+    email: row.email || "",
+    phone: row.phone || "",
+    status: row.status || "active",
+  };
   dialogVisible.value = true;
 };
 
-// 查看截图
+// ===== 查看截图 =====
 const viewScreenshots = (employeeId) => {
   router.push(`/screenshots?employee_id=${employeeId}`);
 };
 
-// 删除员工
+// ===== 删除员工 =====
 const deleteEmployee = (row) => {
+  const employeeId = row.employee_id || row.id;
   ElMessageBox.confirm(
     `确定要删除员工 "${row.name}" 吗？此操作不可恢复！`,
     "警告",
@@ -361,18 +420,25 @@ const deleteEmployee = (row) => {
       cancelButtonText: "取消",
       type: "warning",
     },
-  ).then(async () => {
-    try {
-      await employeeApi.deleteEmployee(row.id);
-      ElMessage.success("删除成功");
-      loadEmployees();
-    } catch (error) {
-      console.error("删除失败:", error);
-    }
-  });
+  )
+    .then(async () => {
+      try {
+        await employeeApi.deleteEmployee(employeeId);
+        ElMessage.success("删除成功");
+        // 如果当前页只有一条数据且不是第一页，则返回上一页
+        if (employees.value.length === 1 && currentPage.value > 1) {
+          currentPage.value--;
+        }
+        loadEmployees();
+      } catch (error) {
+        console.error("删除失败:", error);
+        ElMessage.error(error.response?.data?.detail || "删除失败");
+      }
+    })
+    .catch(() => {});
 };
 
-// 重置表单
+// ===== 重置表单 =====
 const resetForm = () => {
   formData.value = {
     employee_id: "",
@@ -386,7 +452,7 @@ const resetForm = () => {
   formRef.value?.clearValidate();
 };
 
-// 提交表单
+// ===== 提交表单 =====
 const submitForm = async () => {
   if (!formRef.value) return;
 
@@ -409,6 +475,7 @@ const submitForm = async () => {
         loadEmployees();
       } catch (error) {
         console.error("提交失败:", error);
+        ElMessage.error(error.response?.data?.detail || "提交失败");
       } finally {
         submitting.value = false;
       }
@@ -416,12 +483,12 @@ const submitForm = async () => {
   });
 };
 
-// 行点击
+// ===== 行点击 =====
 const handleRowClick = (row) => {
-  viewScreenshots(row.id);
+  viewScreenshots(row.employee_id || row.id);
 };
 
-// 监听路由参数
+// ===== 监听路由参数 =====
 onMounted(() => {
   loadEmployees();
 
@@ -429,10 +496,14 @@ onMounted(() => {
     viewScreenshots(route.query.view);
   }
 });
+
+// ===== 监听分页参数变化 =====
+watch([currentPage, pageSize], () => {
+  loadEmployees();
+});
 </script>
 
 <style scoped>
-/* 样式完全保持不变 */
 .employees {
   padding: 20px;
 }

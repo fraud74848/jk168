@@ -69,12 +69,12 @@
       </el-row>
     </el-card>
 
-    <!-- 时间线滑块 -->
+    <!-- 时间线滑块（基于所有数据） -->
     <el-card v-if="screenshots.length > 0" class="timeline-bar" shadow="hover">
       <div class="timeline-header">
         <span class="timeline-title">时间线浏览</span>
         <span class="timeline-info"
-          >{{ filteredScreenshots.length }} / {{ screenshots.length }} 张</span
+          >{{ paginatedScreenshots.length }} / {{ screenshots.length }} 张</span
         >
       </div>
       <el-slider
@@ -90,12 +90,12 @@
     <el-card class="grid-card" shadow="hover">
       <div v-loading="loading" class="screenshot-grid">
         <el-empty
-          v-if="filteredScreenshots.length === 0"
+          v-if="paginatedScreenshots.length === 0"
           description="暂无截图"
         />
 
         <div
-          v-for="item in filteredScreenshots"
+          v-for="item in paginatedScreenshots"
           :key="item.id"
           class="screenshot-item"
           @click="previewImage(item)"
@@ -138,16 +138,16 @@
         </div>
       </div>
 
-      <!-- 分页 -->
+      <!-- 分页 - 修复：使用 total 作为总数 -->
       <div v-if="filteredScreenshots.length > 0" class="pagination">
         <el-pagination
-          :current-page="currentPage"
-          :page-size="pageSize"
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
           :page-sizes="[12, 24, 48, 96]"
-          :total="filteredScreenshots.length"
+          :total="total"
           layout="total, sizes, prev, pager, next, jumper"
-          @size-change="handlePageChange"
-          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
+          @current-change="handleCurrentChange"
         />
       </div>
     </el-card>
@@ -234,7 +234,6 @@ import {
   Clock,
   User,
   Monitor,
-  Document,
   Lock,
   Download,
 } from "@element-plus/icons-vue";
@@ -259,6 +258,7 @@ const timeFilter = ref(null);
 const previewVisible = ref(false);
 const previewFullscreen = ref(false);
 const currentPreview = ref(null);
+const total = ref(0);
 
 // 确保所有过滤器都有默认值
 const filters = ref({
@@ -276,6 +276,13 @@ const timeMarks = {
   23: "23:00",
 };
 
+// ===== 计算分页后的数据 =====
+const paginatedScreenshots = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value;
+  const end = start + pageSize.value;
+  return filteredScreenshots.value.slice(start, end);
+});
+
 // ===== 预览标题使用员工姓名 =====
 const previewTitle = computed(() => {
   if (!currentPreview.value) return "";
@@ -287,18 +294,15 @@ const previewTitle = computed(() => {
 const getEmployeeName = (item) => {
   if (!item || !item.employee_id) return "未知员工";
 
-  // 1. 优先使用后端返回的 name 字段（现在有了！）
+  // 1. 优先使用后端返回的 name 字段
   if (item.name) {
-    console.log("使用 name 字段:", item.name); // 添加调试日志
     return item.name;
   }
 
   // 2. 其次使用映射表中的姓名（兼容旧数据）
   const name = employeeNameMap.value.get(item.employee_id);
-  console.log("使用映射表:", name); // 添加调试日志
   return name || item.employee_id;
 };
-// ============================
 
 // 获取图片URL
 const getImageUrl = (path) => {
@@ -331,21 +335,23 @@ const loadEmployees = async () => {
     employees.value.forEach((emp) => {
       if (emp.id && emp.name) {
         employeeNameMap.value.set(emp.id, emp.name);
-        console.log(`员工映射: ${emp.id} -> ${emp.name}`);
       }
     });
-
-    console.log("员工映射表已建立，共", employeeNameMap.value.size, "条记录");
   } catch (error) {
     console.error("加载员工列表失败:", error);
     employees.value = [];
   }
 };
-// =============================
+
+// ===== 加载截图列表 =====
+// ===== 加载截图列表 =====
 const loadScreenshots = async () => {
   loading.value = true;
   try {
-    const params = {};
+    const params = {
+      skip: (currentPage.value - 1) * pageSize.value,
+      limit: pageSize.value,
+    };
 
     if (filters.value.employeeId) {
       params.employee_id = filters.value.employeeId;
@@ -356,19 +362,25 @@ const loadScreenshots = async () => {
       params.end_date = filters.value.dateRange[1] + " 23:59:59";
     }
 
-    const data = await screenshotApi.getScreenshots(params);
-    screenshots.value = Array.isArray(data) ? data : [];
+    const response = await screenshotApi.getScreenshots(params);
 
-    // 更详细的调试信息
-    if (screenshots.value.length > 0) {
-      const first = screenshots.value[0];
-      console.log("第一条完整数据:", first); // ← 查看完整数据
-      console.log("employee_name字段:", first.employee_name); // ← 检查这个字段
-      console.log(
-        "employeeNameMap中是否有此员工:",
-        employeeNameMap.value.get(first.employee_id),
-      );
-      console.log("getEmployeeName返回值:", getEmployeeName(first));
+    // 处理返回数据
+    if (response && typeof response === "object") {
+      if (response.items) {
+        // 新格式：{ items: [], total: 100 }
+        screenshots.value = response.items;
+        total.value = response.total || 0;
+      } else if (Array.isArray(response)) {
+        // 旧格式：直接返回数组
+        screenshots.value = response;
+        total.value = response.length;
+      } else {
+        screenshots.value = [];
+        total.value = 0;
+      }
+    } else {
+      screenshots.value = [];
+      total.value = 0;
     }
 
     applyTimeFilter();
@@ -376,12 +388,13 @@ const loadScreenshots = async () => {
     console.error("加载截图失败:", error);
     ElMessage.error("加载截图失败");
     screenshots.value = [];
+    total.value = 0;
   } finally {
     loading.value = false;
   }
 };
 
-// ===== 时间筛选使用统一工具获取小时 =====
+// ===== 时间筛选 =====
 const filterByTime = () => {
   if (!screenshots.value || screenshots.value.length === 0) {
     filteredScreenshots.value = [];
@@ -400,7 +413,6 @@ const filterByTime = () => {
   }
   currentPage.value = 1;
 };
-// =================================
 
 // 应用时间筛选
 const applyTimeFilter = () => {
@@ -409,6 +421,7 @@ const applyTimeFilter = () => {
 
 // 处理筛选变化
 const handleFilterChange = () => {
+  currentPage.value = 1;
   loadScreenshots();
 };
 
@@ -421,12 +434,19 @@ const resetFilters = () => {
     endTime: "",
   };
   timeFilter.value = null;
+  currentPage.value = 1;
   loadScreenshots();
 };
 
-// 分页处理
-const handlePageChange = () => {
-  // 分页逻辑由el-pagination自动处理
+// 分页大小变化
+const handleSizeChange = (val) => {
+  pageSize.value = val;
+  currentPage.value = 1;
+};
+
+// 当前页变化
+const handleCurrentChange = (val) => {
+  currentPage.value = val;
 };
 
 // 预览图片
@@ -455,6 +475,15 @@ watch(
     }
   },
   { immediate: true },
+);
+
+// 监听筛选条件变化
+watch(
+  () => [filters.value.employeeId, filters.value.dateRange],
+  () => {
+    loadScreenshots();
+  },
+  { deep: true },
 );
 
 onMounted(() => {

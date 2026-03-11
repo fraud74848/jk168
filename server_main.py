@@ -576,26 +576,96 @@ async def upload_batch(
 
 
 # ==================== 员工管理接口 ====================
-
-
 @app.get("/api/employees", response_model=List[schemas.Employee], tags=["员工"])
 def get_employees(
     skip: int = 0,
     limit: int = 100,
     status: Optional[str] = None,
+    online_only: Optional[bool] = None,
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """获取员工列表"""
+    """
+    获取员工列表（支持分页、搜索和状态筛选）
+
+    - skip: 跳过的记录数
+    - limit: 返回的最大记录数
+    - status: 状态筛选 (active/inactive)
+    - online_only: 是否只返回在线员工
+    - search: 搜索关键词（姓名、ID、部门）
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import or_
+
+    # 构建基础查询
     query = db.query(models.Employee)
 
+    # 状态筛选
     if status:
         query = query.filter(models.Employee.status == status)
 
-    employees = (
-        query.order_by(models.Employee.employee_id).offset(skip).limit(limit).all()
+    # 搜索筛选
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            or_(
+                models.Employee.name.ilike(search_term),
+                models.Employee.employee_id.ilike(search_term),
+                models.Employee.department.ilike(search_term),
+                models.Employee.position.ilike(search_term),
+            )
+        )
+
+    # 获取所有符合条件的员工（用于在线筛选）
+    all_employees = query.all()
+
+    # 在线/离线筛选
+    if online_only is not None:
+        cutoff = datetime.utcnow() - timedelta(minutes=10)
+        filtered_employees = []
+
+        for emp in all_employees:
+            # 检查员工是否有在线客户端
+            has_online = any(
+                client.last_seen
+                and (
+                    client.last_seen.replace(tzinfo=None)
+                    if client.last_seen.tzinfo
+                    else client.last_seen
+                )
+                >= cutoff
+                for client in emp.clients
+            )
+
+            if online_only and has_online:
+                filtered_employees.append(emp)
+            elif not online_only and not has_online:
+                filtered_employees.append(emp)
+
+        employees = filtered_employees
+    else:
+        employees = all_employees
+
+    # 应用分页
+    paginated_employees = (
+        employees[skip : skip + limit] if skip < len(employees) else []
     )
-    return employees
+
+    # 转换为字典并添加统计信息
+    result = []
+    for emp in paginated_employees:
+        emp_dict = emp.to_dict()
+        result.append(emp_dict)
+
+    # 设置响应头，返回总数（如果需要）
+    # 注意：这不会改变返回格式，但前端可以通过响应头获取总数
+    from fastapi.responses import JSONResponse
+
+    response = JSONResponse(content=result)
+    response.headers["X-Total-Count"] = str(len(employees))
+
+    return response
 
 
 # ===== 修改点1：日期路由必须放在最前面，使用 path 参数 =====
@@ -747,10 +817,7 @@ def delete_employee(
 
 
 # ==================== 截图接口 ====================
-# ==================== 截图接口 ====================
-
-
-@app.get("/api/screenshots", response_model=List[schemas.Screenshot], tags=["截图"])
+@app.get("/api/screenshots", tags=["截图"])
 def get_screenshots(
     employee_id: Optional[str] = None,
     client_id: Optional[str] = None,
@@ -761,8 +828,32 @@ def get_screenshots(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """获取截图列表"""
-    from sqlalchemy import text
+    """获取截图列表（支持分页）"""
+    from sqlalchemy import text, func
+
+    # 先获取总数
+    count_sql = """
+        SELECT COUNT(*) as total
+        FROM screenshots s
+        WHERE 1=1
+    """
+    count_params = {}
+
+    if employee_id:
+        count_sql += " AND s.employee_id = :employee_id"
+        count_params["employee_id"] = employee_id
+    if client_id:
+        count_sql += " AND s.client_id = :client_id"
+        count_params["client_id"] = client_id
+    if start_date:
+        count_sql += " AND s.screenshot_time >= :start_date"
+        count_params["start_date"] = start_date
+    if end_date:
+        count_sql += " AND s.screenshot_time <= :end_date"
+        count_params["end_date"] = end_date
+
+    total_result = db.execute(text(count_sql), count_params).first()
+    total = total_result[0] if total_result else 0
 
     # 使用原生SQL查询，直接连表获取员工姓名
     sql = """
@@ -802,15 +893,11 @@ def get_screenshots(
     # 转换为字典列表
     screenshots = []
     for row in result:
-        # 将Row对象转换为字典
         row_dict = dict(row._mapping)
-
-        # 构建返回数据
         screenshot = {
             "id": row_dict.get("id"),
             "employee_id": row_dict.get("employee_id"),
-            "name": row_dict.get("name")
-            or row_dict.get("employee_id"),  # 如果没有姓名，显示ID
+            "name": row_dict.get("name") or row_dict.get("employee_id"),
             "client_id": row_dict.get("client_id"),
             "filename": row_dict.get("filename"),
             "thumbnail": row_dict.get("thumbnail"),
@@ -824,7 +911,6 @@ def get_screenshots(
             "windows_user": row_dict.get("windows_user"),
             "image_format": row_dict.get("image_format"),
             "is_encrypted": row_dict.get("is_encrypted"),
-            # 添加格式化后的字段
             "url": row_dict.get("storage_url"),
             "time": (
                 row_dict.get("screenshot_time").strftime("%H:%M:%S")
@@ -847,7 +933,11 @@ def get_screenshots(
         }
         screenshots.append(screenshot)
 
-    return screenshots
+    # 返回带总数的对象
+    response = JSONResponse(
+        content={"items": screenshots, "total": total, "skip": skip, "limit": limit}
+    )
+    return response
 
 
 @app.get(
