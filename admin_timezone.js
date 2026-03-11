@@ -18,10 +18,10 @@ dayjs.locale("zh-cn");
  * @param {string|Date} utcTime - UTC时间
  * @returns {dayjs.Dayjs} 北京时间
  */
-export function toBeijingTime(utcTime) {
-  if (!utcTime) return null;
-  // 假设后端返回的是UTC时间，转换为北京时间
-  return dayjs.utc(utcTime).tz("Asia/Shanghai");
+export function toBeijingTime(time) {
+  if (!time) return null;
+  // 后端存储的是北京时间，直接使用
+  return dayjs(time);
 }
 
 /**

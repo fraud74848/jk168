@@ -34,7 +34,7 @@ import logging
 import asyncio
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_
 
 import server_models as models
 import server_schemas as schemas
@@ -576,7 +576,7 @@ async def upload_batch(
 
 
 # ==================== 员工管理接口 ====================
-@app.get("/api/employees", response_model=List[schemas.Employee], tags=["员工"])
+@app.get("/api/employees", tags=["员工"])
 def get_employees(
     skip: int = 0,
     limit: int = 100,
@@ -829,115 +829,174 @@ def get_screenshots(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """获取截图列表（支持分页）"""
-    from sqlalchemy import text, func
 
-    # 先获取总数
-    count_sql = """
-        SELECT COUNT(*) as total
-        FROM screenshots s
-        WHERE 1=1
-    """
-    count_params = {}
+    from sqlalchemy import text
 
-    if employee_id:
-        count_sql += " AND s.employee_id = :employee_id"
-        count_params["employee_id"] = employee_id
-    if client_id:
-        count_sql += " AND s.client_id = :client_id"
-        count_params["client_id"] = client_id
-    if start_date:
-        count_sql += " AND s.screenshot_time >= :start_date"
-        count_params["start_date"] = start_date
-    if end_date:
-        count_sql += " AND s.screenshot_time <= :end_date"
-        count_params["end_date"] = end_date
+    try:
+        # ==============================
+        # 1 获取总数
+        # ==============================
 
-    total_result = db.execute(text(count_sql), count_params).first()
-    total = total_result[0] if total_result else 0
+        count_sql = """
+            SELECT COUNT(*)
+            FROM screenshots s
+            WHERE 1=1
+        """
 
-    # 使用原生SQL查询，直接连表获取员工姓名
-    sql = """
-        SELECT 
-            s.*,
-            e.name as name
-        FROM screenshots s
-        LEFT JOIN employees e ON s.employee_id = e.employee_id
-        WHERE 1=1
-    """
-    params = {}
+        count_params = {}
 
-    if employee_id:
-        sql += " AND s.employee_id = :employee_id"
-        params["employee_id"] = employee_id
+        if employee_id:
+            count_sql += " AND s.employee_id = :employee_id"
+            count_params["employee_id"] = employee_id
 
-    if client_id:
-        sql += " AND s.client_id = :client_id"
-        params["client_id"] = client_id
+        if client_id:
+            count_sql += " AND s.client_id = :client_id"
+            count_params["client_id"] = client_id
 
-    if start_date:
-        sql += " AND s.screenshot_time >= :start_date"
-        params["start_date"] = start_date
+        if start_date:
+            count_sql += " AND s.screenshot_time >= :start_date"
+            count_params["start_date"] = start_date
 
-    if end_date:
-        sql += " AND s.screenshot_time <= :end_date"
-        params["end_date"] = end_date
+        if end_date:
+            count_sql += " AND s.screenshot_time <= :end_date"
+            count_params["end_date"] = end_date
 
-    sql += " ORDER BY s.screenshot_time DESC"
-    sql += " OFFSET :skip LIMIT :limit"
-    params["skip"] = skip
-    params["limit"] = limit
+        total_result = db.execute(text(count_sql), count_params).scalar()
+        total = total_result if total_result else 0
 
-    # 执行查询
-    result = db.execute(text(sql), params).fetchall()
+        # ==============================
+        # 2 构建查询SQL
+        # ==============================
 
-    # 转换为字典列表
-    screenshots = []
-    for row in result:
-        row_dict = dict(row._mapping)
-        screenshot = {
-            "id": row_dict.get("id"),
-            "employee_id": row_dict.get("employee_id"),
-            "name": row_dict.get("name") or row_dict.get("employee_id"),
-            "client_id": row_dict.get("client_id"),
-            "filename": row_dict.get("filename"),
-            "thumbnail": row_dict.get("thumbnail"),
-            "file_size": row_dict.get("file_size"),
-            "width": row_dict.get("width"),
-            "height": row_dict.get("height"),
-            "storage_url": row_dict.get("storage_url"),
-            "uploaded_at": row_dict.get("uploaded_at"),
-            "screenshot_time": row_dict.get("screenshot_time"),
-            "computer_name": row_dict.get("computer_name"),
-            "windows_user": row_dict.get("windows_user"),
-            "image_format": row_dict.get("image_format"),
-            "is_encrypted": row_dict.get("is_encrypted"),
-            "url": row_dict.get("storage_url"),
-            "time": (
-                row_dict.get("screenshot_time").strftime("%H:%M:%S")
-                if row_dict.get("screenshot_time")
-                else None
-            ),
-            "date": (
-                row_dict.get("screenshot_time").strftime("%Y-%m-%d")
-                if row_dict.get("screenshot_time")
-                else None
-            ),
-            "datetime": (
-                row_dict.get("screenshot_time").strftime("%Y-%m-%d %H:%M:%S")
-                if row_dict.get("screenshot_time")
-                else None
-            ),
-            "size_str": format_size(row_dict.get("file_size")),
-            "format": row_dict.get("image_format"),
-            "encrypted": row_dict.get("is_encrypted"),
-        }
-        screenshots.append(screenshot)
+        sql = """
+            SELECT
+                s.id,
+                s.employee_id,
+                s.client_id,
+                s.filename,
+                s.thumbnail,
+                s.file_size,
+                s.width,
+                s.height,
+                s.storage_url,
+                s.uploaded_at,
+                s.screenshot_time,
+                s.computer_name,
+                s.windows_user,
+                s.image_format,
+                s.is_encrypted,
+                e.name as name
+            FROM screenshots s
+            LEFT JOIN employees e
+            ON s.employee_id = e.employee_id
+            WHERE 1=1
+        """
 
-    # 返回带总数的对象
-    response = JSONResponse(
-        content={"items": screenshots, "total": total, "skip": skip, "limit": limit}
-    )
-    return response
+        params = {}
+
+        if employee_id:
+            sql += " AND s.employee_id = :employee_id"
+            params["employee_id"] = employee_id
+
+        if client_id:
+            sql += " AND s.client_id = :client_id"
+            params["client_id"] = client_id
+
+        if start_date:
+            sql += " AND s.screenshot_time >= :start_date"
+            params["start_date"] = start_date
+
+        if end_date:
+            sql += " AND s.screenshot_time <= :end_date"
+            params["end_date"] = end_date
+
+        # ==============================
+        # 3 分页优化
+        # ==============================
+
+        if skip < 1000:
+            sql += " ORDER BY s.screenshot_time DESC"
+            sql += " OFFSET :skip LIMIT :limit"
+
+            params["skip"] = skip
+            params["limit"] = limit
+
+        else:
+            cursor_sql = """
+                SELECT screenshot_time
+                FROM screenshots
+                ORDER BY screenshot_time DESC
+                OFFSET :skip
+                LIMIT 1
+            """
+
+            cursor_time = db.execute(text(cursor_sql), {"skip": skip}).scalar()
+
+            if cursor_time:
+                sql += " AND s.screenshot_time <= :cursor_time"
+                params["cursor_time"] = cursor_time
+
+            sql += " ORDER BY s.screenshot_time DESC LIMIT :limit"
+            params["limit"] = limit
+
+        # ==============================
+        # 4 执行查询
+        # ==============================
+
+        result = db.execute(text(sql), params).fetchall()
+
+        # ==============================
+        # 5 转换数据
+        # ==============================
+
+        screenshots = []
+
+        for row in result:
+
+            row_dict = dict(row._mapping)
+
+            st = row_dict.get("screenshot_time")
+            ua = row_dict.get("uploaded_at")
+
+            screenshot = {
+                "id": row_dict.get("id"),
+                "employee_id": row_dict.get("employee_id"),
+                "name": row_dict.get("name") or row_dict.get("employee_id"),
+                "client_id": row_dict.get("client_id"),
+                "filename": row_dict.get("filename"),
+                "thumbnail": row_dict.get("thumbnail"),
+                "file_size": row_dict.get("file_size"),
+                "width": row_dict.get("width"),
+                "height": row_dict.get("height"),
+                "storage_url": row_dict.get("storage_url"),
+                "uploaded_at": ua.isoformat() if ua else None,
+                "screenshot_time": st.isoformat() if st else None,
+                "computer_name": row_dict.get("computer_name"),
+                "windows_user": row_dict.get("windows_user"),
+                "image_format": row_dict.get("image_format"),
+                "is_encrypted": row_dict.get("is_encrypted"),
+                "url": row_dict.get("storage_url"),
+                "time": st.strftime("%H:%M:%S") if st else None,
+                "date": st.strftime("%Y-%m-%d") if st else None,
+                "datetime": (st.strftime("%Y-%m-%d %H:%M:%S") if st else None),
+                "size_str": format_size(row_dict.get("file_size")),
+                "format": row_dict.get("image_format"),
+                "encrypted": row_dict.get("is_encrypted"),
+            }
+
+            screenshots.append(screenshot)
+
+        # ==============================
+        # 6 返回结果
+        # ==============================
+
+        return {"items": screenshots, "total": total, "skip": skip, "limit": limit}
+
+    except Exception as e:
+
+        logger.error(f"截图接口错误: {str(e)}", exc_info=True)
+
+        raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
 
 @app.get(
@@ -1113,7 +1172,7 @@ def format_size(size):
 # ==================== 客户端管理接口 ====================
 
 
-@app.get("/api/clients", response_model=List[schemas.Client], tags=["客户端"])
+@app.get("/api/clients", tags=["客户端"])
 def get_clients(
     skip: int = 0,
     limit: int = 100,
