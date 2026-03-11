@@ -1613,23 +1613,19 @@ def process_batch_upload(
 
 # ==================== 静态文件服务 ====================
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 from fastapi.responses import FileResponse
+from pathlib import Path
 import os
 
-# 1. 挂载根目录（提供前端页面）
-index_path = Path("index.html")
-if index_path.exists():
-    app.mount("/", StaticFiles(directory=".", html=True), name="static")
-    logger.info(f"✅ 前端静态文件已挂载")
-else:
-    logger.warning(f"⚠️ index.html 不存在于根目录")
+# ==================== 静态文件服务 ====================
 
-# 2. 挂载截图目录（提供图片文件）
+# 1. 先挂载截图目录（必须放在前面）
 screenshots_path = Path("/data/screenshots")
 if screenshots_path.exists():
     app.mount(
-        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
+        "/screenshots", 
+        StaticFiles(directory="/data/screenshots"), 
+        name="screenshots"
     )
     logger.info(f"✅ 截图目录已挂载: /data/screenshots")
 
@@ -1644,6 +1640,59 @@ if screenshots_path.exists():
         logger.error(f"❌ 读取截图目录失败: {e}")
 else:
     logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
+
+# 2. 定义前端文件目录
+static_dir = Path(".")
+index_path = static_dir / "index.html"
+
+if index_path.exists():
+    logger.info(f"✅ 找到 index.html，前端页面可访问")
+else:
+    logger.warning(f"⚠️ index.html 不存在于根目录")
+
+# 3. 挂载静态资源目录（js, css, 图片等）- 可选
+# 如果你有专门的静态资源目录，可以这样挂载
+assets_dir = static_dir / "assets"
+if assets_dir.exists():
+    app.mount("/assets", StaticFiles(directory="assets"), name="assets")
+    logger.info(f"✅ 静态资源目录已挂载: /assets")
+
+# 4. 处理所有前端路由（关键修复）
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    """
+    处理所有前端路由：
+    - 如果是API请求，返回404（应该已经被前面的路由捕获）
+    - 如果是静态资源文件，直接返回
+    - 其他所有路径都返回 index.html
+    """
+    
+    # 跳过API路径
+    if full_path.startswith("api/") or full_path == "api":
+        return {"error": "API endpoint not found"}, 404
+    
+    # 检查是否是静态资源文件（有扩展名的）
+    static_extensions = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', 
+                         '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot']
+    
+    if any(full_path.endswith(ext) for ext in static_extensions):
+        file_path = static_dir / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+    
+    # 其他所有路径都返回 index.html
+    if index_path.exists():
+        return FileResponse(index_path)
+    
+    return {"error": "Frontend not found"}, 404
+
+# 5. 根路径处理
+@app.get("/")
+async def serve_root():
+    """访问根路径返回 index.html"""
+    if index_path.exists():
+        return FileResponse(index_path)
+    return {"error": "Frontend not found"}, 404
 
 
 if __name__ == "__main__":
