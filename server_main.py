@@ -576,7 +576,7 @@ async def upload_batch(
 
 
 # ==================== 员工管理接口 ====================
-@app.get("/api/employees", tags=["员工"])
+@app.get("/api/employees", tags=["员工"])  # 移除 response_model
 def get_employees(
     skip: int = 0,
     limit: int = 100,
@@ -588,12 +588,6 @@ def get_employees(
 ):
     """
     获取员工列表（支持分页、搜索和状态筛选）
-
-    - skip: 跳过的记录数
-    - limit: 返回的最大记录数
-    - status: 状态筛选 (active/inactive)
-    - online_only: 是否只返回在线员工
-    - search: 搜索关键词（姓名、ID、部门）
     """
     from datetime import datetime, timedelta
     from sqlalchemy import or_
@@ -617,6 +611,9 @@ def get_employees(
             )
         )
 
+    # 获取总数（在应用在线筛选之前）
+    total_before_online = query.count()
+
     # 获取所有符合条件的员工（用于在线筛选）
     all_employees = query.all()
 
@@ -626,7 +623,6 @@ def get_employees(
         filtered_employees = []
 
         for emp in all_employees:
-            # 检查员工是否有在线客户端
             has_online = any(
                 client.last_seen
                 and (
@@ -644,8 +640,10 @@ def get_employees(
                 filtered_employees.append(emp)
 
         employees = filtered_employees
+        total = len(employees)  # 在线筛选后的总数
     else:
         employees = all_employees
+        total = total_before_online
 
     # 应用分页
     paginated_employees = (
@@ -658,14 +656,8 @@ def get_employees(
         emp_dict = emp.to_dict()
         result.append(emp_dict)
 
-    # 设置响应头，返回总数（如果需要）
-    # 注意：这不会改变返回格式，但前端可以通过响应头获取总数
-    from fastapi.responses import JSONResponse
-
-    response = JSONResponse(content=result)
-    response.headers["X-Total-Count"] = str(len(employees))
-
-    return response
+    # ✅ 返回统一格式，与截图接口保持一致
+    return {"items": result, "total": total, "skip": skip, "limit": limit}
 
 
 # ===== 修改点1：日期路由必须放在最前面，使用 path 参数 =====

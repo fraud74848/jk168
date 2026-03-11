@@ -438,15 +438,17 @@ const resetFilters = () => {
   loadScreenshots();
 };
 
+// 当前页变化
+const handleCurrentChange = (val) => {
+  currentPage.value = val;
+  loadScreenshots();
+};
+
 // 分页大小变化
 const handleSizeChange = (val) => {
   pageSize.value = val;
   currentPage.value = 1;
-};
-
-// 当前页变化
-const handleCurrentChange = (val) => {
-  currentPage.value = val;
+  loadScreenshots();
 };
 
 // 预览图片

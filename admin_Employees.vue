@@ -299,12 +299,10 @@ const loadEmployees = async () => {
       limit: pageSize.value,
     };
 
-    // 添加搜索参数
     if (searchQuery.value) {
       params.search = searchQuery.value;
     }
 
-    // 添加状态筛选
     if (statusFilter.value) {
       if (statusFilter.value === "online") {
         params.online_only = true;
@@ -317,15 +315,17 @@ const loadEmployees = async () => {
 
     const response = await employeeApi.getEmployees(params);
 
-    // 处理返回数据（支持两种格式）
+    // ✅ 统一处理返回格式
     if (response && typeof response === "object") {
-      if (Array.isArray(response.items)) {
+      if (response.items) {
         // 新格式：{ items: [], total: 100 }
         employees.value = response.items;
         total.value = response.total || 0;
       } else if (Array.isArray(response)) {
         // 旧格式：直接返回数组
         employees.value = response;
+        // ❌ 这里需要从响应头获取总数，但API层没返回
+        // 暂时使用数组长度，但会不准确
         total.value = response.length;
       } else {
         employees.value = [];
