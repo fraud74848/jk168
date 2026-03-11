@@ -12,10 +12,14 @@
             @change="handleFilterChange"
           >
             <el-option
-              v-for="(emp, idx) in employees"
-              :key="emp?.id || `emp-${idx}`"
-              :label="emp?.name ? `${emp.name} (${emp.id})` : '加载中...'"
-              :value="emp?.id || ''"
+              v-for="emp in employees"
+              :key="emp.employee_id || emp.id"
+              :label="
+                emp.name
+                  ? `${emp.name} (${emp.employee_id || emp.id})`
+                  : '加载中...'
+              "
+              :value="emp.employee_id || emp.id"
             />
           </el-select>
         </el-col>
@@ -325,25 +329,39 @@ const getImageUrl = (path) => {
 };
 
 // ===== 加载员工列表并建立映射 =====
+// ===== 加载员工列表并建立映射 =====
 const loadEmployees = async () => {
   try {
-    const data = await employeeApi.getEmployees();
-    employees.value = Array.isArray(data) ? data : [];
+    const response = await employeeApi.getEmployees({ limit: 1000 });
+
+    // 处理返回数据
+    if (response && response.items) {
+      employees.value = response.items;
+    } else if (Array.isArray(response)) {
+      employees.value = response;
+    } else {
+      employees.value = [];
+    }
 
     // 建立员工ID到姓名的映射
     employeeNameMap.value.clear();
     employees.value.forEach((emp) => {
-      if (emp.id && emp.name) {
-        employeeNameMap.value.set(emp.id, emp.name);
+      // 注意：后端返回的ID字段可能是 employee_id 或 id
+      const empId = emp.employee_id || emp.id;
+      if (empId && emp.name) {
+        employeeNameMap.value.set(empId, emp.name);
+        console.log(`员工映射: ${empId} -> ${emp.name}`); // 调试日志
       }
     });
+
+    console.log("员工列表:", employees.value); // 调试日志
+    console.log("员工映射表已建立，共", employeeNameMap.value.size, "条记录");
   } catch (error) {
     console.error("加载员工列表失败:", error);
     employees.value = [];
   }
 };
 
-// ===== 加载截图列表 =====
 // ===== 加载截图列表 =====
 const loadScreenshots = async () => {
   loading.value = true;
@@ -362,45 +380,58 @@ const loadScreenshots = async () => {
       params.end_date = filters.value.dateRange[1] + " 23:59:59";
     }
 
+    // 添加时间筛选参数（可选，后端支持）
+    if (filters.value.startTime) {
+      params.start_time = filters.value.startTime;
+    }
+    if (filters.value.endTime) {
+      params.end_time = filters.value.endTime;
+    }
+
     const response = await screenshotApi.getScreenshots(params);
 
     // 处理返回数据
     if (response && typeof response === "object") {
+      let items = [];
+
       if (response.items) {
-        // ✅ 新格式：{ items: [], total: 100 }
-        screenshots.value = response.items;
+        // 新格式
+        items = response.items;
         total.value = response.total || 0;
-
-        // ✅ 重要：清空并重新设置 filteredScreenshots
-        filteredScreenshots.value = screenshots.value;
-
-        // 如果时间筛选器有值，重新应用
-        if (timeFilter.value !== null) {
-          filterByTime();
-        }
       } else if (Array.isArray(response)) {
-        // 旧格式：直接返回数组
-        screenshots.value = response;
-        total.value = response.length;
-        filteredScreenshots.value = response;
+        // 旧格式
+        items = response;
+        total.value = items.length;
       } else {
-        screenshots.value = [];
+        items = [];
         total.value = 0;
-        filteredScreenshots.value = [];
       }
-    } else {
-      screenshots.value = [];
-      total.value = 0;
-      filteredScreenshots.value = [];
-    }
 
-    // 不需要再调用 applyTimeFilter()，因为上面已经处理了
+      // 应用前端时间筛选
+      if (timeFilter.value !== null) {
+        filteredScreenshots.value = items.filter((s) => {
+          if (!s.screenshot_time) return false;
+          const hour = getHour(s.screenshot_time);
+          return hour === timeFilter.value;
+        });
+      } else {
+        filteredScreenshots.value = items;
+      }
+
+      // 更新完整数据源
+      screenshots.value = items;
+    } else {
+      // 返回格式异常
+      screenshots.value = [];
+      filteredScreenshots.value = [];
+      total.value = 0;
+    }
   } catch (error) {
     console.error("加载截图失败:", error);
     ElMessage.error("加载截图失败");
     screenshots.value = [];
-    total.value = 0;
     filteredScreenshots.value = [];
+    total.value = 0;
   } finally {
     loading.value = false;
   }
