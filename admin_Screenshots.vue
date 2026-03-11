@@ -442,17 +442,16 @@ const filterByTime = () => {
   }
 
   if (timeFilter.value === null) {
-    filteredScreenshots.value = [];
+    // ✅ 修复：没有时间筛选时，显示所有数据
+    filteredScreenshots.value = screenshots.value;
   } else {
     filteredScreenshots.value = screenshots.value.filter((s) => {
       if (!s.screenshot_time) return false;
-      // 使用统一工具获取正确的小时
       const hour = getHour(s.screenshot_time);
       return hour === timeFilter.value;
     });
   }
 };
-
 // ===== 应用时间筛选 =====
 const applyTimeFilter = () => {
   filterByTime();
