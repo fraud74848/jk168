@@ -73,12 +73,27 @@
       </el-row>
     </el-card>
 
-    <!-- 时间线滑块（基于所有数据） -->
-    <el-card v-if="screenshots.length > 0" class="timeline-bar" shadow="hover">
+    <!-- 时间线滑块（现在控制后端时间筛选） -->
+    <el-card v-if="total > 0" class="timeline-bar" shadow="hover">
       <div class="timeline-header">
-        <span class="timeline-title">时间线浏览</span>
+        <div class="timeline-title-section">
+          <span class="timeline-title">时间线浏览</span>
+          <el-tag
+            v-if="timeFilter !== null"
+            type="warning"
+            size="small"
+            effect="light"
+            class="time-filter-active"
+          >
+            <el-icon><Timer /></el-icon>
+            筛选: {{ formatHour(timeFilter) }}
+            <el-icon @click.stop="clearTimeFilter" class="clear-filter"
+              ><Close
+            /></el-icon>
+          </el-tag>
+        </div>
         <span class="timeline-info"
-          >{{ paginatedScreenshots.length }} / {{ screenshots.length }} 张</span
+          >{{ screenshots.length }} / {{ total }} 张</span
         >
       </div>
       <el-slider
@@ -86,20 +101,17 @@
         :min="0"
         :max="23"
         :marks="timeMarks"
-        @input="filterByTime"
+        @input="handleTimeFilterChange"
       />
     </el-card>
 
     <!-- 截图网格 -->
     <el-card class="grid-card" shadow="hover">
       <div v-loading="loading" class="screenshot-grid">
-        <el-empty
-          v-if="paginatedScreenshots.length === 0"
-          description="暂无截图"
-        />
+        <el-empty v-if="screenshots.length === 0" description="暂无截图" />
 
         <div
-          v-for="item in paginatedScreenshots"
+          v-for="item in screenshots"
           :key="item.id"
           class="screenshot-item"
           @click="previewImage(item)"
@@ -240,6 +252,8 @@ import {
   Monitor,
   Lock,
   Download,
+  Timer,
+  Close,
 } from "@element-plus/icons-vue";
 import { screenshotApi, employeeApi } from "./admin_api";
 
@@ -254,8 +268,8 @@ const employees = ref([]);
 const employeeNameMap = ref(new Map());
 // ============================
 
-const screenshots = ref([]); // 所有从API获取的数据
-const filteredScreenshots = ref([]); // 经过时间筛选后的数据
+// ✅ 简化：只保留 screenshots，移除 filteredScreenshots
+const screenshots = ref([]); // 直接从API返回的数据
 const currentPage = ref(1);
 const pageSize = ref(24);
 const timeFilter = ref(null);
@@ -280,16 +294,8 @@ const timeMarks = {
   23: "23:00",
 };
 
-// ===== 修复：计算分页后的数据 =====
-const paginatedScreenshots = computed(() => {
-  // 如果有时筛选，对 filteredScreenshots 分页
-  // 如果没有时间筛选，对 screenshots 分页
-  const sourceArray =
-    timeFilter.value !== null ? filteredScreenshots.value : screenshots.value;
-  const start = (currentPage.value - 1) * pageSize.value;
-  const end = start + pageSize.value;
-  return sourceArray.slice(start, end);
-});
+// ===== ✅ 简化：后端已分页，直接返回 =====
+const paginatedScreenshots = computed(() => screenshots.value);
 
 // ===== 预览标题使用员工姓名 =====
 const previewTitle = computed(() => {
@@ -297,6 +303,11 @@ const previewTitle = computed(() => {
   const employeeName = getEmployeeName(currentPreview.value);
   return `截图预览 - ${employeeName} - ${currentPreview.value.datetime}`;
 });
+
+// ===== 格式化小时显示 =====
+const formatHour = (hour) => {
+  return `${hour.toString().padStart(2, "0")}:00 - ${hour.toString().padStart(2, "0")}:59`;
+};
 
 // ===== 获取员工姓名的函数 =====
 const getEmployeeName = (item) => {
@@ -365,7 +376,7 @@ const loadEmployees = async () => {
   }
 };
 
-// ===== 加载截图列表（修复版）=====
+// ===== ✅ 核心：加载截图列表（完全依赖后端分页）=====
 const loadScreenshots = async () => {
   loading.value = true;
   try {
@@ -374,16 +385,18 @@ const loadScreenshots = async () => {
       limit: pageSize.value,
     };
 
+    // 员工筛选
     if (filters.value.employeeId) {
       params.employee_id = filters.value.employeeId;
     }
 
+    // 日期范围筛选
     if (filters.value.dateRange && filters.value.dateRange.length === 2) {
       params.start_date = filters.value.dateRange[0] + " 00:00:00";
       params.end_date = filters.value.dateRange[1] + " 23:59:59";
     }
 
-    // 添加时间筛选参数（可选，后端支持）
+    // ✅ 时间筛选也交给后端处理
     if (filters.value.startTime) {
       params.start_time = filters.value.startTime;
     }
@@ -397,72 +410,78 @@ const loadScreenshots = async () => {
 
     // 处理返回数据
     if (response && typeof response === "object") {
-      let items = [];
-
       if (response.items) {
         // 新格式
-        items = response.items;
+        screenshots.value = response.items;
         total.value = response.total || 0;
       } else if (Array.isArray(response)) {
         // 旧格式
-        items = response;
-        total.value = items.length;
+        screenshots.value = response;
+        total.value = screenshots.value.length;
       } else {
-        items = [];
+        screenshots.value = [];
         total.value = 0;
       }
-
-      // 保存所有数据
-      screenshots.value = items;
-
-      // 应用时间筛选（如果有）
-      applyTimeFilter();
     } else {
-      // 返回格式异常
       screenshots.value = [];
-      filteredScreenshots.value = [];
       total.value = 0;
     }
   } catch (error) {
     console.error("加载截图失败:", error);
     ElMessage.error("加载截图失败");
     screenshots.value = [];
-    filteredScreenshots.value = [];
     total.value = 0;
   } finally {
     loading.value = false;
   }
 };
 
-// ===== 修复：时间筛选函数 =====
-const filterByTime = () => {
-  if (!screenshots.value || screenshots.value.length === 0) {
-    filteredScreenshots.value = [];
-    return;
-  }
-
+// ===== ✅ 处理时间筛选变化 =====
+const handleTimeFilterChange = () => {
   if (timeFilter.value === null) {
-    // ✅ 修复：没有时间筛选时，显示所有数据
-    filteredScreenshots.value = screenshots.value;
+    // 清除时间筛选时，恢复到完整的日期范围
+    if (filters.value.dateRange && filters.value.dateRange.length === 2) {
+      filters.value.start_date = filters.value.dateRange[0] + " 00:00:00";
+      filters.value.end_date = filters.value.dateRange[1] + " 23:59:59";
+    } else {
+      // 如果没有日期范围，删除日期参数
+      delete filters.value.start_date;
+      delete filters.value.end_date;
+    }
   } else {
-    filteredScreenshots.value = screenshots.value.filter((s) => {
-      if (!s.screenshot_time) return false;
-      const hour = getHour(s.screenshot_time);
-      return hour === timeFilter.value;
-    });
+    const hour = timeFilter.value.toString().padStart(2, "0");
+
+    if (filters.value.dateRange && filters.value.dateRange.length === 2) {
+      // 有日期范围：合并日期和时间
+      filters.value.start_date = `${filters.value.dateRange[0]} ${hour}:00:00`;
+      filters.value.end_date = `${filters.value.dateRange[1]} ${hour}:59:59`;
+    } else {
+      // 没有日期范围：使用当前日期
+      const today = new Date().toISOString().split("T")[0];
+      filters.value.start_date = `${today} ${hour}:00:00`;
+      filters.value.end_date = `${today} ${hour}:59:59`;
+    }
   }
+  currentPage.value = 1;
+  loadScreenshots();
 };
-// ===== 应用时间筛选 =====
-const applyTimeFilter = () => {
-  filterByTime();
+
+// ===== 清除时间筛选 =====
+const clearTimeFilter = () => {
+  timeFilter.value = null;
+  filters.value.startTime = "";
+  filters.value.endTime = "";
+  currentPage.value = 1;
+  loadScreenshots();
 };
 
 // ===== 处理筛选变化 =====
 const handleFilterChange = () => {
   currentPage.value = 1;
-  // 清除时间筛选
+  // 清除时间筛选滑块
   timeFilter.value = null;
-  filteredScreenshots.value = [];
+  filters.value.startTime = "";
+  filters.value.endTime = "";
   loadScreenshots();
 };
 
@@ -475,30 +494,21 @@ const resetFilters = () => {
     endTime: "",
   };
   timeFilter.value = null;
-  filteredScreenshots.value = [];
   currentPage.value = 1;
   loadScreenshots();
 };
 
-// ===== 当前页变化 =====
+// ===== ✅ 简化：翻页都重新加载数据 =====
 const handleCurrentChange = (val) => {
   currentPage.value = val;
-  // 只有当没有时间筛选时，才重新加载数据
-  if (timeFilter.value === null) {
-    loadScreenshots();
-  }
-  // 如果有时间筛选，不重新加载，因为分页是在本地进行的
+  loadScreenshots();
 };
 
-// ===== 分页大小变化 =====
+// ===== ✅ 简化：分页大小变化也重新加载 =====
 const handleSizeChange = (val) => {
   pageSize.value = val;
   currentPage.value = 1;
-  // 只有当没有时间筛选时，才重新加载数据
-  if (timeFilter.value === null) {
-    loadScreenshots();
-  }
-  // 如果有时间筛选，不重新加载，因为分页是在本地进行的
+  loadScreenshots();
 };
 
 // ===== 预览图片 =====
@@ -538,11 +548,6 @@ watch(
   { deep: true },
 );
 
-// ===== 监听时间筛选变化 =====
-watch(timeFilter, () => {
-  filterByTime();
-});
-
 onMounted(() => {
   loadEmployees();
 });
@@ -569,6 +574,12 @@ onMounted(() => {
   margin-bottom: 10px;
 }
 
+.timeline-title-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .timeline-title {
   font-weight: 500;
   color: #333;
@@ -577,6 +588,22 @@ onMounted(() => {
 .timeline-info {
   font-size: 12px;
   color: #999;
+}
+
+.time-filter-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.clear-filter {
+  cursor: pointer;
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.clear-filter:hover {
+  color: #f56c6c;
 }
 
 .grid-card {
