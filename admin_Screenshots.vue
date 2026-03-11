@@ -139,7 +139,7 @@
       </div>
 
       <!-- 分页 - 修复：使用 total 作为总数 -->
-      <div v-if="filteredScreenshots.length > 0" class="pagination">
+      <div v-if="total > 0" class="pagination">
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
@@ -367,28 +367,40 @@ const loadScreenshots = async () => {
     // 处理返回数据
     if (response && typeof response === "object") {
       if (response.items) {
-        // 新格式：{ items: [], total: 100 }
+        // ✅ 新格式：{ items: [], total: 100 }
         screenshots.value = response.items;
         total.value = response.total || 0;
+
+        // ✅ 重要：清空并重新设置 filteredScreenshots
+        filteredScreenshots.value = screenshots.value;
+
+        // 如果时间筛选器有值，重新应用
+        if (timeFilter.value !== null) {
+          filterByTime();
+        }
       } else if (Array.isArray(response)) {
         // 旧格式：直接返回数组
         screenshots.value = response;
         total.value = response.length;
+        filteredScreenshots.value = response;
       } else {
         screenshots.value = [];
         total.value = 0;
+        filteredScreenshots.value = [];
       }
     } else {
       screenshots.value = [];
       total.value = 0;
+      filteredScreenshots.value = [];
     }
 
-    applyTimeFilter();
+    // 不需要再调用 applyTimeFilter()，因为上面已经处理了
   } catch (error) {
     console.error("加载截图失败:", error);
     ElMessage.error("加载截图失败");
     screenshots.value = [];
     total.value = 0;
+    filteredScreenshots.value = [];
   } finally {
     loading.value = false;
   }
