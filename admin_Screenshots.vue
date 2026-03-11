@@ -142,7 +142,7 @@
         </div>
       </div>
 
-      <!-- 分页 - 修复：使用 total 作为总数 -->
+      <!-- 分页 -->
       <div v-if="total > 0" class="pagination">
         <el-pagination
           v-model:current-page="currentPage"
@@ -254,15 +254,15 @@ const employees = ref([]);
 const employeeNameMap = ref(new Map());
 // ============================
 
-const screenshots = ref([]);
-const filteredScreenshots = ref([]);
+const screenshots = ref([]); // 所有从API获取的数据
+const filteredScreenshots = ref([]); // 经过时间筛选后的数据
 const currentPage = ref(1);
 const pageSize = ref(24);
 const timeFilter = ref(null);
 const previewVisible = ref(false);
 const previewFullscreen = ref(false);
 const currentPreview = ref(null);
-const total = ref(0);
+const total = ref(0); // 总记录数（来自API）
 
 // 确保所有过滤器都有默认值
 const filters = ref({
@@ -280,11 +280,15 @@ const timeMarks = {
   23: "23:00",
 };
 
-// ===== 计算分页后的数据 =====
+// ===== 修复：计算分页后的数据 =====
 const paginatedScreenshots = computed(() => {
+  // 如果有时筛选，对 filteredScreenshots 分页
+  // 如果没有时间筛选，对 screenshots 分页
+  const sourceArray =
+    timeFilter.value !== null ? filteredScreenshots.value : screenshots.value;
   const start = (currentPage.value - 1) * pageSize.value;
   const end = start + pageSize.value;
-  return filteredScreenshots.value.slice(start, end);
+  return sourceArray.slice(start, end);
 });
 
 // ===== 预览标题使用员工姓名 =====
@@ -329,7 +333,6 @@ const getImageUrl = (path) => {
 };
 
 // ===== 加载员工列表并建立映射 =====
-// ===== 加载员工列表并建立映射 =====
 const loadEmployees = async () => {
   try {
     const response = await employeeApi.getEmployees({ limit: 1000 });
@@ -362,7 +365,7 @@ const loadEmployees = async () => {
   }
 };
 
-// ===== 加载截图列表 =====
+// ===== 加载截图列表（修复版）=====
 const loadScreenshots = async () => {
   loading.value = true;
   try {
@@ -388,7 +391,9 @@ const loadScreenshots = async () => {
       params.end_time = filters.value.endTime;
     }
 
+    console.log("请求参数:", params);
     const response = await screenshotApi.getScreenshots(params);
+    console.log("API返回:", response);
 
     // 处理返回数据
     if (response && typeof response === "object") {
@@ -407,19 +412,11 @@ const loadScreenshots = async () => {
         total.value = 0;
       }
 
-      // 应用前端时间筛选
-      if (timeFilter.value !== null) {
-        filteredScreenshots.value = items.filter((s) => {
-          if (!s.screenshot_time) return false;
-          const hour = getHour(s.screenshot_time);
-          return hour === timeFilter.value;
-        });
-      } else {
-        filteredScreenshots.value = items;
-      }
-
-      // 更新完整数据源
+      // 保存所有数据
       screenshots.value = items;
+
+      // 应用时间筛选（如果有）
+      applyTimeFilter();
     } else {
       // 返回格式异常
       screenshots.value = [];
@@ -437,7 +434,7 @@ const loadScreenshots = async () => {
   }
 };
 
-// ===== 时间筛选 =====
+// ===== 修复：时间筛选函数 =====
 const filterByTime = () => {
   if (!screenshots.value || screenshots.value.length === 0) {
     filteredScreenshots.value = [];
@@ -445,7 +442,7 @@ const filterByTime = () => {
   }
 
   if (timeFilter.value === null) {
-    filteredScreenshots.value = screenshots.value;
+    filteredScreenshots.value = [];
   } else {
     filteredScreenshots.value = screenshots.value.filter((s) => {
       if (!s.screenshot_time) return false;
@@ -454,21 +451,25 @@ const filterByTime = () => {
       return hour === timeFilter.value;
     });
   }
+  // 重置到第一页
   currentPage.value = 1;
 };
 
-// 应用时间筛选
+// ===== 应用时间筛选 =====
 const applyTimeFilter = () => {
   filterByTime();
 };
 
-// 处理筛选变化
+// ===== 处理筛选变化 =====
 const handleFilterChange = () => {
   currentPage.value = 1;
+  // 清除时间筛选
+  timeFilter.value = null;
+  filteredScreenshots.value = [];
   loadScreenshots();
 };
 
-// 重置筛选
+// ===== 重置筛选 =====
 const resetFilters = () => {
   filters.value = {
     employeeId: "",
@@ -477,30 +478,39 @@ const resetFilters = () => {
     endTime: "",
   };
   timeFilter.value = null;
+  filteredScreenshots.value = [];
   currentPage.value = 1;
   loadScreenshots();
 };
 
-// 当前页变化
+// ===== 当前页变化 =====
 const handleCurrentChange = (val) => {
   currentPage.value = val;
-  loadScreenshots();
+  // 只有当没有时间筛选时，才重新加载数据
+  if (timeFilter.value === null) {
+    loadScreenshots();
+  }
+  // 如果有时间筛选，不重新加载，因为分页是在本地进行的
 };
 
-// 分页大小变化
+// ===== 分页大小变化 =====
 const handleSizeChange = (val) => {
   pageSize.value = val;
   currentPage.value = 1;
-  loadScreenshots();
+  // 只有当没有时间筛选时，才重新加载数据
+  if (timeFilter.value === null) {
+    loadScreenshots();
+  }
+  // 如果有时间筛选，不重新加载，因为分页是在本地进行的
 };
 
-// 预览图片
+// ===== 预览图片 =====
 const previewImage = (item) => {
   currentPreview.value = item;
   previewVisible.value = true;
 };
 
-// 下载图片
+// ===== 下载图片 =====
 const downloadImage = () => {
   if (!currentPreview.value) return;
 
@@ -510,7 +520,7 @@ const downloadImage = () => {
   link.click();
 };
 
-// 监听路由参数
+// ===== 监听路由参数 =====
 watch(
   () => route.query,
   (query) => {
@@ -522,7 +532,7 @@ watch(
   { immediate: true },
 );
 
-// 监听筛选条件变化
+// ===== 监听筛选条件变化 =====
 watch(
   () => [filters.value.employeeId, filters.value.dateRange],
   () => {
@@ -531,12 +541,18 @@ watch(
   { deep: true },
 );
 
+// ===== 监听时间筛选变化 =====
+watch(timeFilter, () => {
+  filterByTime();
+});
+
 onMounted(() => {
   loadEmployees();
 });
 </script>
 
 <style scoped>
+/* 样式保持不变 */
 .screenshots {
   padding: 20px;
 }
