@@ -451,8 +451,6 @@ const filterByTime = () => {
       return hour === timeFilter.value;
     });
   }
-  // 重置到第一页
-  currentPage.value = 1;
 };
 
 // ===== 应用时间筛选 =====
