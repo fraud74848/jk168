@@ -1197,16 +1197,26 @@ def get_screenshots(
         if skip < 0 or limit < 1 or limit > 1000:
             raise HTTPException(status_code=400, detail="无效的分页参数")
 
-        # 日期格式验证
-        date_pattern = r"^\d{4}-\d{2}-\d{2}$"
+        # ✅ 修复：放宽日期格式验证，支持完整时间字符串
+        # 日期格式可以是 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS
+        date_pattern = r"^\d{4}-\d{2}-\d{2}(\s\d{2}:\d{2}:\d{2})?$"
         time_pattern = r"^\d{2}:\d{2}(:\d{2})?$"
 
         import re
 
+        # 验证日期参数（允许带时间）
         if start_date and not re.match(date_pattern, start_date):
-            raise HTTPException(status_code=400, detail="开始日期格式应为 YYYY-MM-DD")
+            raise HTTPException(
+                status_code=400,
+                detail="开始日期格式应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS",
+            )
         if end_date and not re.match(date_pattern, end_date):
-            raise HTTPException(status_code=400, detail="结束日期格式应为 YYYY-MM-DD")
+            raise HTTPException(
+                status_code=400,
+                detail="结束日期格式应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS",
+            )
+
+        # 验证时间参数
         if start_time and not re.match(time_pattern, start_time):
             raise HTTPException(
                 status_code=400, detail="开始时间格式应为 HH:MM 或 HH:MM:SS"
