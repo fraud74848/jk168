@@ -79,11 +79,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # 创建存储目录
 STORAGE_PATH = Path(Config.SCREENSHOT_DIR)
 STORAGE_PATH.mkdir(parents=True, exist_ok=True)
+logger.info(f"✅ 截图存储路径: {STORAGE_PATH.absolute()}")
+
 THUMBNAIL_PATH = STORAGE_PATH / "thumbnails"
 THUMBNAIL_PATH.mkdir(parents=True, exist_ok=True)
+logger.info(f"✅ 缩略图存储路径: {THUMBNAIL_PATH.absolute()}")
+
+# 列出一些文件用于调试
+try:
+    files = list(STORAGE_PATH.glob("**/*.webp"))[:5]
+    if files:
+        logger.info(
+            f"📸 找到示例截图: {[str(f.relative_to(STORAGE_PATH)) for f in files]}"
+        )
+except Exception as e:
+    logger.error(f"❌ 读取截图目录失败: {e}")
 
 # 启动清理任务
 cleanup = DataCleanup()
@@ -1157,54 +1171,63 @@ def delete_employee(
 def get_screenshots(
     employee_id: Optional[str] = None,
     client_id: Optional[str] = None,
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """获取截图列表（支持分页）"""
+    """获取截图列表（支持分页和时间筛选）"""
 
     from sqlalchemy import text
+    import logging
+    from datetime import datetime
+
+    logger = logging.getLogger(__name__)
 
     try:
         # ==============================
-        # 1 获取总数
+        # 1. 参数验证和预处理
         # ==============================
 
-        count_sql = """
-            SELECT COUNT(*)
+        # 验证分页参数
+        if skip < 0 or limit < 1 or limit > 1000:
+            raise HTTPException(status_code=400, detail="无效的分页参数")
+
+        # 日期格式验证
+        date_pattern = r"^\d{4}-\d{2}-\d{2}$"
+        time_pattern = r"^\d{2}:\d{2}(:\d{2})?$"
+
+        import re
+
+        if start_date and not re.match(date_pattern, start_date):
+            raise HTTPException(status_code=400, detail="开始日期格式应为 YYYY-MM-DD")
+        if end_date and not re.match(date_pattern, end_date):
+            raise HTTPException(status_code=400, detail="结束日期格式应为 YYYY-MM-DD")
+        if start_time and not re.match(time_pattern, start_time):
+            raise HTTPException(
+                status_code=400, detail="开始时间格式应为 HH:MM 或 HH:MM:SS"
+            )
+        if end_time and not re.match(time_pattern, end_time):
+            raise HTTPException(
+                status_code=400, detail="结束时间格式应为 HH:MM 或 HH:MM:SS"
+            )
+
+        # ==============================
+        # 2. 构建基础查询
+        # ==============================
+
+        # 注意：这里不能简单替换，需要单独构建count查询
+        base_sql = """
             FROM screenshots s
+            LEFT JOIN employees e ON s.employee_id = e.employee_id
             WHERE 1=1
         """
 
-        count_params = {}
-
-        if employee_id:
-            count_sql += " AND s.employee_id = :employee_id"
-            count_params["employee_id"] = employee_id
-
-        if client_id:
-            count_sql += " AND s.client_id = :client_id"
-            count_params["client_id"] = client_id
-
-        if start_date:
-            count_sql += " AND s.screenshot_time >= :start_date"
-            count_params["start_date"] = start_date
-
-        if end_date:
-            count_sql += " AND s.screenshot_time <= :end_date"
-            count_params["end_date"] = end_date
-
-        total_result = db.execute(text(count_sql), count_params).scalar()
-        total = total_result if total_result else 0
-
-        # ==============================
-        # 2 构建查询SQL
-        # ==============================
-
-        sql = """
+        select_sql = """
             SELECT
                 s.id,
                 s.employee_id,
@@ -1221,83 +1244,134 @@ def get_screenshots(
                 s.windows_user,
                 s.image_format,
                 s.is_encrypted,
-                e.name as name
-            FROM screenshots s
-            LEFT JOIN employees e
-            ON s.employee_id = e.employee_id
-            WHERE 1=1
+                e.name as employee_name
         """
 
         params = {}
 
+        # 员工筛选
         if employee_id:
-            sql += " AND s.employee_id = :employee_id"
+            base_sql += " AND s.employee_id = :employee_id"
             params["employee_id"] = employee_id
 
+        # 客户端筛选
         if client_id:
-            sql += " AND s.client_id = :client_id"
+            base_sql += " AND s.client_id = :client_id"
             params["client_id"] = client_id
 
-        if start_date:
-            sql += " AND s.screenshot_time >= :start_date"
-            params["start_date"] = start_date
-
-        if end_date:
-            sql += " AND s.screenshot_time <= :end_date"
-            params["end_date"] = end_date
-
         # ==============================
-        # 3 分页优化
+        # 3. 日期时间处理（修复版）
         # ==============================
 
-        if skip < 1000:
-            sql += " ORDER BY s.screenshot_time DESC"
-            sql += " OFFSET :skip LIMIT :limit"
+        # 处理带日期的时间范围
+        if start_date and start_time:
+            # 合并日期和时间
+            start_datetime = f"{start_date} {start_time}"
+            if len(start_time) == 5:  # HH:MM 格式
+                start_datetime += ":00"
+            base_sql += " AND s.screenshot_time >= :start_datetime"
+            params["start_datetime"] = start_datetime
+        elif start_date:
+            # 只有日期，从当天开始
+            base_sql += " AND s.screenshot_time >= :start_date"
+            params["start_date"] = f"{start_date} 00:00:00"
+        elif start_time:
+            # 只有时间，使用今天日期
+            today = datetime.now().strftime("%Y-%m-%d")
+            start_datetime = f"{today} {start_time}"
+            if len(start_time) == 5:
+                start_datetime += ":00"
+            base_sql += " AND s.screenshot_time >= :start_datetime"
+            params["start_datetime"] = start_datetime
 
+        if end_date and end_time:
+            # 合并日期和时间
+            end_datetime = f"{end_date} {end_time}"
+            if len(end_time) == 5:
+                end_datetime += ":59"
+            base_sql += " AND s.screenshot_time <= :end_datetime"
+            params["end_datetime"] = end_datetime
+        elif end_date:
+            # 只有日期，到当天结束
+            base_sql += " AND s.screenshot_time <= :end_date"
+            params["end_date"] = f"{end_date} 23:59:59"
+        elif end_time:
+            # 只有时间，使用今天日期
+            today = datetime.now().strftime("%Y-%m-%d")
+            end_datetime = f"{today} {end_time}"
+            if len(end_time) == 5:
+                end_datetime += ":59"
+            base_sql += " AND s.screenshot_time <= :end_datetime"
+            params["end_datetime"] = end_datetime
+
+        # ==============================
+        # 4. 获取总数
+        # ==============================
+
+        count_sql = f"SELECT COUNT(*) {base_sql}"
+        total = db.execute(text(count_sql), params).scalar() or 0
+
+        # ==============================
+        # 5. 大分页优化（保留第一个接口的优点）
+        # ==============================
+
+        if skip >= 1000:
+            # 使用游标方式优化大分页
+            cursor_sql = f"""
+                SELECT screenshot_time 
+                {base_sql} 
+                ORDER BY screenshot_time DESC 
+                OFFSET :skip LIMIT 1
+            """
+            cursor_params = params.copy()
+            cursor_params["skip"] = skip
+
+            cursor_time = db.execute(text(cursor_sql), cursor_params).scalar()
+
+            if cursor_time:
+                base_sql += " AND s.screenshot_time <= :cursor_time"
+                params["cursor_time"] = cursor_time
+
+            # 重置skip，使用游标后不需要offset
+            sql = (
+                f"{select_sql} {base_sql} ORDER BY s.screenshot_time DESC LIMIT :limit"
+            )
+            params["limit"] = limit
+        else:
+            # 小偏移量直接使用OFFSET
+            sql = f"{select_sql} {base_sql} ORDER BY s.screenshot_time DESC OFFSET :skip LIMIT :limit"
             params["skip"] = skip
             params["limit"] = limit
 
-        else:
-            cursor_sql = """
-                SELECT screenshot_time
-                FROM screenshots
-                ORDER BY screenshot_time DESC
-                OFFSET :skip
-                LIMIT 1
-            """
-
-            cursor_time = db.execute(text(cursor_sql), {"skip": skip}).scalar()
-
-            if cursor_time:
-                sql += " AND s.screenshot_time <= :cursor_time"
-                params["cursor_time"] = cursor_time
-
-            sql += " ORDER BY s.screenshot_time DESC LIMIT :limit"
-            params["limit"] = limit
-
         # ==============================
-        # 4 执行查询
+        # 6. 执行查询
         # ==============================
 
         result = db.execute(text(sql), params).fetchall()
 
         # ==============================
-        # 5 转换数据
+        # 7. 数据转换（复用format_size函数）
         # ==============================
 
+        def format_file_size(size):
+            """格式化文件大小"""
+            if not size:
+                return "0 B"
+            for unit in ["B", "KB", "MB", "GB"]:
+                if size < 1024.0:
+                    return f"{size:.1f} {unit}"
+                size /= 1024.0
+            return f"{size:.1f} TB"
+
         screenshots = []
-
         for row in result:
-
             row_dict = dict(row._mapping)
-
             st = row_dict.get("screenshot_time")
-            ua = row_dict.get("uploaded_at")
 
             screenshot = {
                 "id": row_dict.get("id"),
                 "employee_id": row_dict.get("employee_id"),
-                "name": row_dict.get("name") or row_dict.get("employee_id"),
+                "name": row_dict.get("employee_name") or row_dict.get("employee_id"),
                 "client_id": row_dict.get("client_id"),
                 "filename": row_dict.get("filename"),
                 "thumbnail": row_dict.get("thumbnail"),
@@ -1305,7 +1379,11 @@ def get_screenshots(
                 "width": row_dict.get("width"),
                 "height": row_dict.get("height"),
                 "storage_url": row_dict.get("storage_url"),
-                "uploaded_at": ua.isoformat() if ua else None,
+                "uploaded_at": (
+                    row_dict.get("uploaded_at").isoformat()
+                    if row_dict.get("uploaded_at")
+                    else None
+                ),
                 "screenshot_time": st.isoformat() if st else None,
                 "computer_name": row_dict.get("computer_name"),
                 "windows_user": row_dict.get("windows_user"),
@@ -1314,24 +1392,29 @@ def get_screenshots(
                 "url": row_dict.get("storage_url"),
                 "time": st.strftime("%H:%M:%S") if st else None,
                 "date": st.strftime("%Y-%m-%d") if st else None,
-                "datetime": (st.strftime("%Y-%m-%d %H:%M:%S") if st else None),
-                "size_str": format_size(row_dict.get("file_size")),
+                "datetime": st.strftime("%Y-%m-%d %H:%M:%S") if st else None,
+                "size_str": format_file_size(row_dict.get("file_size")),
                 "format": row_dict.get("image_format"),
                 "encrypted": row_dict.get("is_encrypted"),
             }
-
             screenshots.append(screenshot)
 
-        # ==============================
-        # 6 返回结果
-        # ==============================
+        logger.info(
+            f"截图查询成功: 条件(employee={employee_id}, date={start_date}~{end_date}), 总数={total}, 返回={len(screenshots)}条"
+        )
 
-        return {"items": screenshots, "total": total, "skip": skip, "limit": limit}
+        return {
+            "items": screenshots,
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "has_more": (skip + len(screenshots)) < total,
+        }
 
+    except HTTPException:
+        raise
     except Exception as e:
-
         logger.error(f"截图接口错误: {str(e)}", exc_info=True)
-
         raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
 
@@ -1502,7 +1585,9 @@ def format_size(size):
         return f"{size} B"
     if size < 1024 * 1024:
         return f"{size/1024:.1f} KB"
-    return f"{size/(1024*1024):.1f} MB"
+    if size < 1024 * 1024 * 1024:
+        return f"{size/(1024*1024):.1f} MB"
+    return f"{size/(1024*1024*1024):.1f} GB"
 
 
 # ==================== 客户端管理接口 ====================
@@ -2000,12 +2085,6 @@ def regenerate_api_key(
 
     return {"api_key": new_api_key}
 
-
-# ==================== 静态文件服务 ====================
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pathlib import Path
-import os
 
 # ==================== 静态文件服务 ====================
 
