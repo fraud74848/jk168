@@ -279,11 +279,14 @@ const currentPreview = ref(null);
 const total = ref(0); // 总记录数（来自API）
 
 // 确保所有过滤器都有默认值
+// 确保所有过滤器都有默认值
 const filters = ref({
   employeeId: "",
   dateRange: [],
   startTime: "",
   endTime: "",
+  start_date: undefined,
+  end_date: undefined,
 });
 
 const timeMarks = {
@@ -377,6 +380,7 @@ const loadEmployees = async () => {
 };
 
 // ===== ✅ 核心：加载截图列表（完全依赖后端分页）=====
+// ===== ✅ 核心：加载截图列表 =====
 const loadScreenshots = async () => {
   loading.value = true;
   try {
@@ -390,8 +394,14 @@ const loadScreenshots = async () => {
       params.employee_id = filters.value.employeeId;
     }
 
-    // ===== 修复：日期和时间组合筛选 =====
-    if (filters.value.dateRange && filters.value.dateRange.length === 2) {
+    // ===== 修复：优先使用时间滑块设置的日期 =====
+    if (filters.value.start_date && filters.value.end_date) {
+      // 时间滑块已经设置好了完整的日期时间
+      params.start_date = filters.value.start_date;
+      params.end_date = filters.value.end_date;
+    }
+    // 否则使用日期范围和时间选择器
+    else if (filters.value.dateRange && filters.value.dateRange.length === 2) {
       const startDate = filters.value.dateRange[0];
       const endDate = filters.value.dateRange[1];
 
@@ -455,9 +465,9 @@ const handleTimeFilterChange = () => {
       filters.value.start_date = filters.value.dateRange[0] + " 00:00:00";
       filters.value.end_date = filters.value.dateRange[1] + " 23:59:59";
     } else {
-      // 如果没有日期范围，删除日期参数
-      delete filters.value.start_date;
-      delete filters.value.end_date;
+      // 如果没有日期范围，设置为 undefined
+      filters.value.start_date = undefined;
+      filters.value.end_date = undefined;
     }
   } else {
     const hour = timeFilter.value.toString().padStart(2, "0");
@@ -493,6 +503,9 @@ const handleFilterChange = () => {
   timeFilter.value = null;
   filters.value.startTime = "";
   filters.value.endTime = "";
+  // 清除时间滑块的日期设置
+  filters.value.start_date = undefined;
+  filters.value.end_date = undefined;
   loadScreenshots();
 };
 
@@ -503,6 +516,8 @@ const resetFilters = () => {
     dateRange: [],
     startTime: "",
     endTime: "",
+    start_date: undefined,
+    end_date: undefined,
   };
   timeFilter.value = null;
   currentPage.value = 1;
