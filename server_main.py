@@ -2299,40 +2299,55 @@ def get_cleanup_status(
 
 @app.get("/screenshots/{path:path}", tags=["文件"])
 async def serve_screenshot(path: str):
-    """提供截图文件（公开访问）"""
+    """提供截图文件（增强日志）"""
+
+    logger.info(f"📸 文件请求: {path}")
 
     if not path or path.strip() == "":
+        logger.warning("文件路径为空")
         raise HTTPException(status_code=404, detail="File not specified")
 
     try:
         # 统一路径分隔符
         path = path.replace("\\", "/")
+        logger.debug(f"清理后的路径: {path}")
 
         # 主存储路径
         base_path = STORAGE_PATH.resolve()
         file_path = (base_path / path).resolve()
 
-        # 防止路径逃逸
-        if not str(file_path).startswith(str(base_path)):
-            logger.warning(f"路径逃逸尝试: {path}")
-            raise HTTPException(status_code=404, detail="Invalid path")
+        logger.debug(f"尝试路径: {file_path}")
+        logger.debug(f"文件存在: {file_path.exists()}")
 
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
+        if file_path.exists():
+            if file_path.is_file():
+                size = file_path.stat().st_size
+                logger.info(f"✅ 文件找到: {path} ({size} bytes)")
+                return FileResponse(file_path)
+            else:
+                logger.warning(f"路径存在但不是文件: {path}")
+        else:
+            logger.debug(f"文件不存在: {path}")
 
-        # 备用路径（兼容旧数据）
+            # 列出父目录内容（调试用）
+            parent_dir = file_path.parent
+            if parent_dir.exists():
+                files = list(parent_dir.glob("*"))[:10]
+                logger.debug(f"父目录 {parent_dir} 中的文件: {[f.name for f in files]}")
+
+        # 备用路径
         backup_base = Path("/data/screenshots").resolve()
         backup_file = (backup_base / path).resolve()
 
         if str(backup_file).startswith(str(backup_base)) and backup_file.exists():
-            logger.info(f"使用备用路径找到文件: {backup_file}")
+            logger.info(f"✅ 在备用路径找到文件: {backup_file}")
             return FileResponse(backup_file)
 
-        logger.warning(f"文件不存在: {path}")
+        logger.warning(f"❌ 文件不存在: {path}")
         raise HTTPException(status_code=404, detail="File not found")
 
     except HTTPException:
-        raise  # 直接抛出HTTP异常
+        raise
     except Exception as e:
         logger.error(f"文件访问错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Server error")
@@ -2528,6 +2543,94 @@ async def debug_file_access(path: str):
             result["found_at"] = str(resolved)
 
     return result
+
+
+@app.get("/api/debug/check-files", tags=["调试"])
+def check_files_existence(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """检查数据库中的文件是否实际存在"""
+
+    # 获取最近的截图
+    screenshots = (
+        db.query(models.Screenshot)
+        .order_by(models.Screenshot.screenshot_time.desc())
+        .limit(limit)
+        .all()
+    )
+
+    result = {
+        "total_checked": len(screenshots),
+        "existing": [],
+        "missing": [],
+        "storage_path": str(STORAGE_PATH),
+    }
+
+    for ss in screenshots:
+        file_path = STORAGE_PATH / ss.filename
+        exists = file_path.exists()
+
+        item = {
+            "id": ss.id,
+            "filename": ss.filename,
+            "storage_url": ss.storage_url,
+            "screenshot_time": (
+                ss.screenshot_time.isoformat() if ss.screenshot_time else None
+            ),
+            "file_path": str(file_path),
+            "exists": exists,
+            "file_size": file_path.stat().st_size if exists else None,
+        }
+
+        if exists:
+            result["existing"].append(item)
+        else:
+            result["missing"].append(item)
+
+    result["existing_count"] = len(result["existing"])
+    result["missing_count"] = len(result["missing"])
+
+    return result
+
+
+@app.get("/api/debug/file-stats", tags=["调试"])
+def get_file_stats(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """获取文件系统统计信息"""
+
+    # 数据库中的记录数
+    db_count = db.query(models.Screenshot).count()
+
+    # 文件系统中的文件数
+    webp_files = list(STORAGE_PATH.glob("**/*.webp"))
+    jpg_files = list(STORAGE_PATH.glob("**/*.jpg"))
+    png_files = list(STORAGE_PATH.glob("**/*.png"))
+
+    fs_count = len(webp_files) + len(jpg_files) + len(png_files)
+
+    # 计算总大小
+    total_size = 0
+    for f in STORAGE_PATH.glob("**/*.*"):
+        if f.is_file():
+            total_size += f.stat().st_size
+
+    return {
+        "database": {"screenshot_records": db_count},
+        "filesystem": {
+            "total_files": fs_count,
+            "webp_files": len(webp_files),
+            "jpg_files": len(jpg_files),
+            "png_files": len(png_files),
+            "total_size_mb": round(total_size / (1024 * 1024), 2),
+            "storage_path": str(STORAGE_PATH),
+        },
+        "difference": db_count - fs_count,
+        "status": "ok" if db_count == fs_count else "inconsistent",
+    }
 
 
 # ==================== 静态文件服务 ====================
