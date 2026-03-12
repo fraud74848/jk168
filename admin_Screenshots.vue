@@ -1,5 +1,16 @@
 <template>
   <div class="screenshots">
+    <!-- ===== 新增：时区提示 ===== -->
+    <el-alert
+      v-if="showTimezoneHint"
+      title="所有时间均为北京时间 (UTC+8)"
+      type="info"
+      :closable="true"
+      show-icon
+      class="timezone-hint"
+      @close="showTimezoneHint = false"
+    />
+
     <!-- 筛选栏 -->
     <el-card class="filter-bar" shadow="hover">
       <el-row :gutter="20" align="middle">
@@ -73,11 +84,11 @@
       </el-row>
     </el-card>
 
-    <!-- 时间线滑块（现在控制后端时间筛选） -->
+    <!-- 时间线滑块 -->
     <el-card v-if="total > 0" class="timeline-bar" shadow="hover">
       <div class="timeline-header">
         <div class="timeline-title-section">
-          <span class="timeline-title">时间线浏览</span>
+          <span class="timeline-title">时间线浏览 (北京时间)</span>
           <el-tag
             v-if="timeFilter !== null"
             type="warning"
@@ -144,7 +155,10 @@
             </div>
             <div class="info-row">
               <el-icon><Clock /></el-icon>
-              <span>{{ formatTime(item.screenshot_time) }}</span>
+              <!-- ===== 修改：添加北京时间标识 ===== -->
+              <span :title="'北京时间'">{{
+                formatTime(item.screenshot_time)
+              }}</span>
             </div>
             <div class="info-row">
               <el-icon><Monitor /></el-icon>
@@ -198,7 +212,8 @@
             <el-descriptions-item label="计算机">
               {{ currentPreview?.computer_name || "未知" }}
             </el-descriptions-item>
-            <el-descriptions-item label="时间">
+            <!-- ===== 修改：添加北京时间标识 ===== -->
+            <el-descriptions-item label="时间 (北京时间)">
               {{ formatFullDateTime(currentPreview?.screenshot_time) }}
             </el-descriptions-item>
             <el-descriptions-item label="用户">
@@ -237,6 +252,7 @@ import {
   formatFullDateTime,
   formatFileSize as formatFileSizeUtil,
   getHour,
+  getCurrentBeijingTime, // ===== 新增：获取当前北京时间 =====
 } from "./admin_timezone";
 // ============================
 
@@ -255,7 +271,7 @@ import {
   Timer,
   Close,
 } from "@element-plus/icons-vue";
-import { screenshotApi, employeeApi } from "./admin_api";
+import { screenshotApi, employeeApi, clientApi } from "./admin_api";
 
 // ===== 使用统一的文件大小格式化函数 =====
 const formatFileSize = formatFileSizeUtil;
@@ -266,6 +282,8 @@ const loading = ref(false);
 const employees = ref([]);
 // ===== 创建员工姓名映射表 =====
 const employeeNameMap = ref(new Map());
+// ===== 新增：时区提示显示状态 =====
+const showTimezoneHint = ref(true);
 // ============================
 
 // ✅ 简化：只保留 screenshots，移除 filteredScreenshots
@@ -279,15 +297,32 @@ const currentPreview = ref(null);
 const total = ref(0); // 总记录数（来自API）
 
 // 确保所有过滤器都有默认值
-// 确保所有过滤器都有默认值
 const filters = ref({
   employeeId: "",
+  clientId: "",
   dateRange: [],
   startTime: "",
   endTime: "",
   start_date: undefined,
   end_date: undefined,
 });
+
+const clients = ref([]);
+
+const loadClients = async () => {
+  try {
+    const response = await clientApi.getClients({ limit: 1000 });
+    if (response && response.items) {
+      clients.value = response.items;
+    } else if (Array.isArray(response)) {
+      clients.value = response;
+    }
+    console.log("客户端列表加载完成:", clients.value.length);
+  } catch (error) {
+    console.error("加载客户端列表失败:", error);
+    clients.value = [];
+  }
+};
 
 const timeMarks = {
   0: "00:00",
@@ -304,7 +339,7 @@ const paginatedScreenshots = computed(() => screenshots.value);
 const previewTitle = computed(() => {
   if (!currentPreview.value) return "";
   const employeeName = getEmployeeName(currentPreview.value);
-  return `截图预览 - ${employeeName} - ${currentPreview.value.datetime}`;
+  return `截图预览 - ${employeeName} - ${currentPreview.value.datetime} (北京时间)`;
 });
 
 // ===== 格式化小时显示 =====
@@ -404,12 +439,20 @@ const loadScreenshots = async () => {
       params.employee_id = filters.value.employeeId;
     }
 
+    if (filters.value.clientId) {
+      params.client_id = filters.value.clientId;
+    }
+
     // ===== 修复：优先使用时间滑块设置的日期 =====
     if (filters.value.start_date && filters.value.end_date) {
       // 时间滑块已经设置好了完整的日期时间
       params.start_date = filters.value.start_date;
       params.end_date = filters.value.end_date;
-      console.log("使用时间滑块日期:", params.start_date, params.end_date);
+      console.log(
+        "使用时间滑块日期(北京时间):",
+        params.start_date,
+        params.end_date,
+      );
     }
     // 否则使用日期范围和时间选择器
     else if (filters.value.dateRange && filters.value.dateRange.length === 2) {
@@ -428,7 +471,11 @@ const loadScreenshots = async () => {
       } else {
         params.end_date = `${endDate} 23:59:59`;
       }
-      console.log("使用日期时间筛选:", params.start_date, params.end_date);
+      console.log(
+        "使用日期时间筛选(北京时间):",
+        params.start_date,
+        params.end_date,
+      );
     } else {
       // 没有日期范围，只有时间筛选
       if (filters.value.startTime) {
@@ -440,12 +487,13 @@ const loadScreenshots = async () => {
       console.log("使用时间筛选:", params.start_time, params.end_time);
     }
 
-    console.log("最终请求参数:", params);
+    console.log("最终请求参数(北京时间):", params);
     const response = await screenshotApi.getScreenshots(params);
     console.log("API返回状态:", {
       hasItems: !!response?.items,
       total: response?.total,
       itemCount: response?.items?.length,
+      timezone: response?.timezone, // 后端返回的时区信息
     });
 
     // 处理返回数据
@@ -467,6 +515,7 @@ const loadScreenshots = async () => {
             url: firstItem.url,
             thumbnail: firstItem.thumbnail,
             imageUrl: imageUrl,
+            screenshot_time: firstItem.screenshot_time, // 北京时间
           });
 
           // 测试图片是否可加载
@@ -588,6 +637,7 @@ const handleFilterChange = () => {
 const resetFilters = () => {
   filters.value = {
     employeeId: "",
+    clientId: "",
     dateRange: [],
     startTime: "",
     endTime: "",
@@ -651,11 +701,20 @@ watch(
 
 onMounted(() => {
   loadEmployees();
+  loadClients();
+  // ===== 新增：打印当前北京时间用于调试 =====
+  console.log("当前北京时间:", getCurrentBeijingTime());
 });
 </script>
 
 <style scoped>
-/* 样式保持不变 */
+/* ===== 新增：时区提示样式 ===== */
+.timezone-hint {
+  margin-bottom: 16px;
+  border-radius: 4px;
+}
+
+/* 其他样式保持不变 */
 .screenshots {
   padding: 20px;
 }

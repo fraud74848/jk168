@@ -1,5 +1,5 @@
 // admin_timezone.js
-// 统一的时间处理工具
+// 统一的时间处理工具 - 所有时间都是北京时间
 
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -13,26 +13,29 @@ dayjs.extend(timezone);
 dayjs.extend(relativeTime);
 dayjs.locale("zh-cn");
 
+// 设置默认时区为北京时间
+const DEFAULT_TIMEZONE = "Asia/Shanghai";
+
 /**
- * 将UTC时间转换为北京时间
- * @param {string|Date} utcTime - UTC时间
- * @returns {dayjs.Dayjs} 北京时间
+ * 解析北京时间
+ * @param {string|Date} time - 时间（后端返回的北京时间）
+ * @returns {dayjs.Dayjs} dayjs对象
  */
 export function toBeijingTime(time) {
   if (!time) return null;
-  // 后端存储的是北京时间，直接使用
   return dayjs(time);
 }
 
 /**
  * 格式化日期时间（北京时间）
- * @param {string|Date} datetime - 要格式化的时间（后端返回的UTC时间）
+ * @param {string|Date} datetime - 要格式化的时间
  * @param {string} format - 格式化模式，默认 'YYYY-MM-DD HH:mm'
  * @returns {string} 格式化后的时间字符串
  */
 export function formatDateTime(datetime, format = "YYYY-MM-DD HH:mm") {
   if (!datetime) return "未知";
-  return toBeijingTime(datetime).format(format);
+  const beijingTime = toBeijingTime(datetime);
+  return beijingTime.format(format);
 }
 
 /**
@@ -46,13 +49,14 @@ export function formatTime(datetime) {
 }
 
 /**
- * 格式化完整日期时间
+ * 格式化完整日期时间（带时区标识）
  * @param {string|Date} datetime - 要格式化的时间
  * @returns {string} 格式化后的时间字符串 (YYYY-MM-DD HH:mm:ss)
  */
 export function formatFullDateTime(datetime) {
   if (!datetime) return "未知";
-  return toBeijingTime(datetime).format("YYYY-MM-DD HH:mm:ss");
+  const beijingTime = toBeijingTime(datetime);
+  return `${beijingTime.format("YYYY-MM-DD HH:mm:ss")} (北京时间)`;
 }
 
 /**
@@ -63,7 +67,7 @@ export function formatFullDateTime(datetime) {
 export function formatRelativeTime(datetime) {
   if (!datetime) return "从未";
   const beijingTime = toBeijingTime(datetime);
-  const now = dayjs().tz("Asia/Shanghai");
+  const now = dayjs().tz(DEFAULT_TIMEZONE);
   const diffMinutes = now.diff(beijingTime, "minute");
 
   if (diffMinutes < 1) return "刚刚";
@@ -74,14 +78,14 @@ export function formatRelativeTime(datetime) {
 
 /**
  * 获取在线状态
- * @param {string|Date} lastActive - 最后活跃时间（UTC）
+ * @param {string|Date} lastActive - 最后活跃时间
  * @param {number} thresholdMinutes - 在线阈值（分钟），默认10分钟
  * @returns {Object} 状态对象 { type, text }
  */
 export function getOnlineStatus(lastActive, thresholdMinutes = 10) {
   if (!lastActive) return { type: "danger", text: "离线" };
 
-  const now = dayjs().tz("Asia/Shanghai");
+  const now = dayjs().tz(DEFAULT_TIMEZONE);
   const last = toBeijingTime(lastActive);
   const diffMinutes = now.diff(last, "minute");
 
@@ -113,6 +117,14 @@ export function formatFileSize(size) {
   return (size / (1024 * 1024)).toFixed(1) + " MB";
 }
 
+/**
+ * 获取当前北京时间（用于调试）
+ * @returns {string} 当前北京时间
+ */
+export function getCurrentBeijingTime() {
+  return dayjs().tz(DEFAULT_TIMEZONE).format("YYYY-MM-DD HH:mm:ss");
+}
+
 export default {
   formatDateTime,
   formatTime,
@@ -121,4 +133,5 @@ export default {
   getOnlineStatus,
   getHour,
   formatFileSize,
+  getCurrentBeijingTime,
 };
