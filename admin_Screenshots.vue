@@ -390,18 +390,31 @@ const loadScreenshots = async () => {
       params.employee_id = filters.value.employeeId;
     }
 
-    // 日期范围筛选
+    // ===== 修复：日期和时间组合筛选 =====
     if (filters.value.dateRange && filters.value.dateRange.length === 2) {
-      params.start_date = filters.value.dateRange[0] + " 00:00:00";
-      params.end_date = filters.value.dateRange[1] + " 23:59:59";
-    }
+      const startDate = filters.value.dateRange[0];
+      const endDate = filters.value.dateRange[1];
 
-    // ✅ 时间筛选也交给后端处理
-    if (filters.value.startTime) {
-      params.start_time = filters.value.startTime;
-    }
-    if (filters.value.endTime) {
-      params.end_time = filters.value.endTime;
+      // 如果有具体时间，组合使用
+      if (filters.value.startTime) {
+        params.start_date = `${startDate} ${filters.value.startTime}:00`;
+      } else {
+        params.start_date = `${startDate} 00:00:00`;
+      }
+
+      if (filters.value.endTime) {
+        params.end_date = `${endDate} ${filters.value.endTime}:59`;
+      } else {
+        params.end_date = `${endDate} 23:59:59`;
+      }
+    } else {
+      // 没有日期范围，只有时间筛选
+      if (filters.value.startTime) {
+        params.start_time = filters.value.startTime;
+      }
+      if (filters.value.endTime) {
+        params.end_time = filters.value.endTime;
+      }
     }
 
     console.log("请求参数:", params);
@@ -411,11 +424,9 @@ const loadScreenshots = async () => {
     // 处理返回数据
     if (response && typeof response === "object") {
       if (response.items) {
-        // 新格式
         screenshots.value = response.items;
         total.value = response.total || 0;
       } else if (Array.isArray(response)) {
-        // 旧格式
         screenshots.value = response;
         total.value = screenshots.value.length;
       } else {
