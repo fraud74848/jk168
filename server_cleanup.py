@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import shutil
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from sqlalchemy import text
@@ -45,20 +46,17 @@ class DataCleanup:
         await self.cleanup_old_data()
 
     async def cleanup_old_data(self):
-        """清理旧数据"""
+        """清理旧数据 - 修复：使用北京时间"""
         if self.retention_hours <= 0:
             logger.info("保留时间设置为0，不执行清理")
             return
 
         try:
-            from datetime import datetime, timedelta
+            from server_timezone import get_beijing_now
 
-            # ===== 修改点1：使用北京时间作为基准时间 =====
-            # 获取当前北京时间
-            beijing_now = datetime.utcnow() + timedelta(hours=8)
-            # 计算清理时间界限（北京时间）
+            # ===== 修复：使用北京时间作为基准时间 =====
+            beijing_now = get_beijing_now()
             cutoff_time = beijing_now - timedelta(hours=self.retention_hours)
-            # ==========================================
 
             logger.info(f"开始清理 {self.retention_hours} 小时前的数据...")
             logger.info(f"当前北京时间: {beijing_now.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -122,8 +120,7 @@ class DataCleanup:
                         f"✅ 清理完成: 删除 {deleted_count} 条记录，{file_count} 个文件，释放 {size_freed/1024/1024:.2f}MB"
                     )
 
-                    # ===== 修改点2：记录活动时间使用北京时间 =====
-                    # 记录清理活动
+                    # 记录清理活动（使用北京时间）
                     db.execute(
                         text(
                             """
@@ -132,15 +129,13 @@ class DataCleanup:
                         """
                         ),
                         {
-                            "details": {
-                                "deleted": deleted_count,
-                                "size_freed": size_freed,
-                            },
-                            "now": beijing_now,  # 原来是 datetime.utcnow()
+                            "details": json.dumps(
+                                {"deleted": deleted_count, "size_freed": size_freed}
+                            ),
+                            "now": beijing_now,
                         },
                     )
                     db.commit()
-                    # ==========================================
                 else:
                     logger.info("没有需要清理的数据")
 
@@ -153,7 +148,6 @@ class DataCleanup:
 
         except Exception as e:
             logger.error(f"清理失败: {e}")
-            # 不抛出异常，避免影响主程序运行
 
     def stop(self):
         """停止清理任务"""

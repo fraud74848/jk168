@@ -119,6 +119,56 @@ class Employee(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
+    @property
+    def client_count(self):
+        """获取关联的客户端数量"""
+        return len(self.clients)
+
+    @property
+    def has_active_clients(self):
+        """是否有活跃客户端"""
+        if not self.clients:
+            return False
+        now = datetime.utcnow()
+        for client in self.clients:
+            if client.last_seen:
+                last_seen = (
+                    client.last_seen.replace(tzinfo=None)
+                    if client.last_seen.tzinfo
+                    else client.last_seen
+                )
+                if (now - last_seen) < timedelta(minutes=10):
+                    return True
+        return False
+
+    @property
+    def last_active_client(self):
+        """最后活跃的客户端"""
+        if not self.clients:
+            return None
+        return max(self.clients, key=lambda c: c.last_seen or datetime.min)
+
+    def to_dict(self):
+        """增强的 to_dict 方法"""
+        return {
+            "id": self.employee_id,
+            "name": self.name,
+            "computer_name": self.computer_name,
+            "windows_user": self.windows_user,
+            "department": self.department,
+            "position": self.position,
+            "email": self.email,
+            "phone": self.phone,
+            "status": self.status,
+            "total_screenshots": self.total_screenshots,
+            "today_screenshots": self.today_screenshots,
+            "online_clients": self.online_clients,
+            "client_count": self.client_count,  # 新增
+            "has_active_clients": self.has_active_clients,  # 新增
+            "last_active": self.last_active.isoformat() if self.last_active else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 
 class Client(Base):
     """客户端表"""

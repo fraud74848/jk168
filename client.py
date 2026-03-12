@@ -33,6 +33,7 @@ import hashlib
 import threading
 import io
 import zipfile
+import random
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -66,8 +67,19 @@ class MonitorClient:
         self.api_client = None
         self.tray = None
 
+        self.first_run = False
+
+        self.CURRENT_VERSION = "3.0.1"
+        self._check_and_reset_old_config()
+
+        self.force_network_check = False
+
         # 从配置加载设置
         self._load_config()
+
+        if not self.client_id:
+            self.first_run = True
+            logger.info("🔔 检测到首次运行，将启动设置向导")
 
         # 初始化截图管理器
         self.screenshot_manager = ScreenshotManager(
@@ -84,6 +96,9 @@ class MonitorClient:
         self.take_screenshot_now = False
         self.offline_mode = False
         self.current_server_index = 0
+
+        self.ws_manager = None
+        self.enable_websocket = self.config_manager.get("enable_websocket", True)
 
         # 统计信息
         self.stats = {
@@ -157,6 +172,85 @@ class MonitorClient:
             f"📝 初始配置 - 间隔: {self.interval}秒, 质量: {self.quality}, 格式: {self.format}"
         )
 
+    def _check_and_reset_old_config(self):
+        """
+        检查是否需要重置旧配置
+        当代码更新或服务器变更时自动重置
+        """
+        try:
+            config_file = Path("config.json")
+            if not config_file.exists():
+                return
+
+            # 读取现有配置
+            with open(config_file, "r", encoding="utf-8") as f:
+                old_config = json.load(f)
+
+            # ===== 检测条件1：配置中没有版本号 =====
+            old_version = old_config.get("version")
+
+            # ===== 检测条件2：配置中有旧的client_id但服务器可能已重置 =====
+            need_reset = False
+            reset_reason = []
+
+            if not old_version:
+                need_reset = True
+                reset_reason.append("配置版本过旧")
+
+            elif old_version != self.CURRENT_VERSION:
+                need_reset = True
+                reset_reason.append(
+                    f"版本升级: {old_version} -> {self.CURRENT_VERSION}"
+                )
+
+            # ===== 检测条件3：检查服务器状态 =====
+            if not need_reset and old_config.get("client_id"):
+                try:
+                    # 尝试连接服务器验证client_id
+                    server_url = old_config.get(
+                        "server_urls", ["http://localhost:8000"]
+                    )[0]
+                    response = requests.get(
+                        f"{server_url}/api/client/{old_config['client_id']}/config",
+                        timeout=3,
+                        verify=False,
+                    )
+                    if response.status_code == 404:
+                        need_reset = True
+                        reset_reason.append("服务器端client_id已失效")
+                except:
+                    pass
+
+            # ===== 如果需要重置，自动备份并删除 =====
+            if need_reset:
+                logger.warning(f"🔄 检测到需要重置配置: {', '.join(reset_reason)}")
+
+                # 创建备份目录
+                backup_dir = Path("backup")
+                backup_dir.mkdir(exist_ok=True)
+
+                # 备份旧配置
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_file = backup_dir / f"config_backup_{timestamp}.json"
+
+                import shutil
+
+                shutil.copy2(config_file, backup_file)
+                logger.info(f"📦 旧配置已备份到: {backup_file}")
+
+                # 删除旧配置
+                config_file.unlink()
+                logger.info("🗑️ 旧配置已删除")
+
+                # 重置内存中的配置
+                self.config_manager.config = self.config_manager.DEFAULT_CONFIG.copy()
+                self.config_manager.save()
+
+                logger.info("✅ 配置重置完成，将使用新配置")
+
+        except Exception as e:
+            logger.error(f"检查旧配置时出错: {e}")
+
     def validate_config(self):
         """验证配置有效性"""
         if not self.server_urls:
@@ -197,7 +291,7 @@ class MonitorClient:
 
     def detect_best_server(self):
         """直接返回本地服务器地址，跳过检测"""
-        local_server = "http://localhost:8000"
+        local_server = "https://jk168.onrender.com"
         logger.info(f"🔧 直接使用本地服务器: {local_server}")
 
         # 简单测试一下连接是否成功
@@ -213,23 +307,109 @@ class MonitorClient:
 
         return local_server
 
-    def register_with_server(self):
-        """向服务器注册"""
-        # 检测最佳服务器
+    def register_with_server(self, silent_mode: bool = False):
+        """向服务器注册（支持首次运行引导 & 图形界面）"""
+
+        # ===== 1. 检测最佳服务器 =====
         self.current_server = self.detect_best_server()
 
-        # 初始化API客户端
+        # ===== 2. 初始化API客户端 =====
         self.api_client = APIClient(
             self.current_server,
             retry_times=self.retry_times,
             retry_delay=self.retry_delay,
         )
 
-        # 如果已有client_id，先获取服务器配置
+        # ===== 3. 获取员工姓名 =====
+        employee_name = None
+
+        # 先尝试从配置读取
+        saved_name = self.config_manager.get("employee_name")
+        if saved_name:
+            employee_name = saved_name
+            logger.info(f"从配置读取员工姓名: {employee_name}")
+
+        # 如果是首次运行（没有client_id）且不是静默模式，显示配置窗口
+        if not self.client_id and not silent_mode:
+            logger.info("首次运行，启动配置向导...")
+
+            try:
+                # 尝试导入GUI模块
+                from client_gui import get_employee_name_gui
+
+                print("\n" + "=" * 50)
+                print("正在打开配置窗口...")
+                print("=" * 50)
+
+                # 显示图形界面
+                gui_name = get_employee_name_gui()
+
+                if gui_name:
+                    employee_name = gui_name
+                    logger.info(f"✅ 通过GUI获取姓名: {employee_name}")
+                else:
+                    # 用户取消，使用默认值
+                    default_name = (
+                        self.system_info.get_windows_user()
+                        or self.system_info.get_computer_name()
+                    )
+                    employee_name = default_name
+                    logger.info(f"用户取消，使用默认姓名: {employee_name}")
+
+            except ImportError:
+                # GUI模块不存在，回退到命令行模式
+                logger.info("GUI模块未安装，使用命令行模式")
+
+                print("\n" + "=" * 60)
+                print("🎉 欢迎使用员工监控系统客户端")
+                print("=" * 60)
+                print("检测到您是首次运行，请填写以下信息：")
+                print("(此信息仅用于员工识别，可在后台管理系统中修改)\n")
+
+                # 获取默认值
+                default_name = (
+                    self.system_info.get_windows_user()
+                    or self.system_info.get_computer_name()
+                )
+
+                # 输入姓名
+                print(f"📝 请输入您的姓名 [默认: {default_name}]:")
+                cmd_name = input(">>> ").strip()
+
+                if cmd_name:
+                    employee_name = cmd_name
+                else:
+                    employee_name = default_name
+
+                print(f"\n✅ 姓名已设置为: {employee_name}")
+                print("=" * 60 + "\n")
+
+            except Exception as e:
+                logger.error(f"配置向导出错: {e}")
+                # 出错时使用默认值
+                employee_name = (
+                    self.system_info.get_windows_user()
+                    or self.system_info.get_computer_name()
+                )
+
+        # 静默模式或已有client_id的情况
+        if not employee_name:
+            # 使用默认值
+            employee_name = (
+                self.system_info.get_windows_user()
+                or self.system_info.get_computer_name()
+            )
+            logger.info(f"使用默认姓名: {employee_name}")
+
+        # 保存姓名到配置
+        if employee_name:
+            self.config_manager.set("employee_name", employee_name)
+            logger.info(f"姓名已保存到配置: {employee_name}")
+
+        # ===== 4. 如果已有 client_id，获取服务器配置 =====
         if self.client_id:
             logger.info(f"使用现有client_id: {self.client_id}")
             try:
-                # 获取服务器配置
                 config = self.api_client.get(f"/api/client/{self.client_id}/config")
                 if config:
                     self._update_config_from_server(config)
@@ -237,10 +417,8 @@ class MonitorClient:
             except Exception as e:
                 logger.debug(f"获取服务器配置失败: {e}")
 
-        # 获取系统信息
+        # ===== 5. 获取系统信息并添加客户端信息 =====
         system_info = self.system_info.get_system_info()
-
-        # 添加客户端信息（使用服务器配置的值）
         system_info.update(
             {
                 "client_version": "3.0",
@@ -248,10 +426,14 @@ class MonitorClient:
                 "quality": self.quality,
                 "interval": self.interval,
                 "capabilities": ["webp", "heartbeat", "batch", "encryption"],
+                # ===== 关键：添加上面获取的姓名 =====
+                "employee_name": employee_name,
             }
         )
 
+        # ===== 6. 向服务器注册 =====
         logger.info(f"正在向服务器注册: {self.current_server}")
+        logger.info(f"发送的姓名: {employee_name}")
 
         try:
             data = self.api_client.post("/api/client/register", json=system_info)
@@ -259,7 +441,6 @@ class MonitorClient:
             self.client_id = data.get("client_id")
             self.employee_id = data.get("employee_id")
 
-            # 从服务器获取最新配置
             if "config" in data:
                 self._update_config_from_server(data["config"])
 
@@ -277,6 +458,8 @@ class MonitorClient:
                 interval=self.interval,
                 quality=self.quality,
                 format=self.format,
+                employee_name=employee_name,  # 也保存姓名
+                version=self.CURRENT_VERSION,
             )
 
             return True
@@ -518,17 +701,49 @@ class MonitorClient:
             time.sleep(5)
 
     def heartbeat_sender(self):
-        """心跳发送线程"""
+        """心跳发送线程 - 工业级实现"""
+
+        heartbeat_failures = 0
+
         while self.running:
+
             try:
                 if not self.offline_mode:
-                    self.send_heartbeat()
-            except Exception as e:
-                logger.debug(f"心跳发送失败: {e}")
+                    success = self.send_heartbeat()
 
+                    if success:
+                        # 心跳成功，重置失败计数
+                        if heartbeat_failures > 0:
+                            logger.info("心跳恢复")
+                        heartbeat_failures = 0
+                    else:
+                        heartbeat_failures += 1
+
+                        # 分级日志
+                        if heartbeat_failures == 1:
+                            logger.warning("⚠️ 心跳发送失败 (第1次)")
+                        elif heartbeat_failures == 2:
+                            logger.warning("⚠️ 心跳发送失败 (第2次)")
+                        elif heartbeat_failures >= 3:
+                            logger.warning("⚠️ 连续3次心跳失败，触发网络检测")
+
+                            # 通知网络线程立即检测
+                            self.force_network_check = True
+
+                            # 重置失败计数，避免无限触发
+                            heartbeat_failures = 0
+                else:
+                    # 离线模式，重置失败计数
+                    heartbeat_failures = 0
+
+            except Exception as e:
+                logger.debug(f"心跳异常: {e}")
+                heartbeat_failures += 1
+
+            # 可中断sleep（60秒间隔）
             for _ in range(60):
                 if not self.running:
-                    break
+                    return
                 time.sleep(1)
 
     def batch_uploader(self):
@@ -542,51 +757,144 @@ class MonitorClient:
                     logger.error(f"批量上传失败: {e}")
 
     def network_monitor(self):
-        """网络监控线程"""
+        """工业级网络监控线程"""
+
         consecutive_failures = 0
+        current_server_index = 0
+
+        # 网络退避参数
+        base_interval = 30
+        max_interval = 300
+        check_interval = base_interval
+
+        session = requests.Session()
+
+        # 上次检查时间
+        last_check_time = time.time()
 
         while self.running:
-            time.sleep(30)
 
-            if not self.running:
-                break
+            # ===== 响应心跳线程的强制检查请求 =====
+            current_time = time.time()
+            force_check = False
 
-            try:
-                response = requests.get(
-                    f"{self.current_server}/health", timeout=5, verify=False
-                )
-                if response.status_code == 200:
-                    if self.offline_mode:
-                        logger.info("网络已恢复，重新连接...")
-                        self.offline_mode = False
-                        consecutive_failures = 0
+            if self.force_network_check:
+                logger.info("收到强制网络检测请求")
+                self.force_network_check = False
+                force_check = True
+                check_interval = base_interval  # 重置间隔
 
-                        # 尝试重新注册
-                        try:
-                            self.register_with_server()
-                        except:
-                            pass
+            # ===== 判断是否需要进行健康检测 =====
+            time_since_last_check = current_time - last_check_time
+
+            if force_check or time_since_last_check >= check_interval:
+
+                last_check_time = current_time
+
+                try:
+                    # ========== 健康检测 ==========
+                    response = session.get(
+                        f"{self.current_server}/health", timeout=5, verify=False
+                    )
+
+                    if response.status_code == 200:
+                        # 网络恢复
+                        if self.offline_mode:
+                            logger.info("🌐 网络恢复，重新连接服务器")
+
+                            self.offline_mode = False
+                            consecutive_failures = 0
+                            check_interval = base_interval
+
+                            # 重新注册
+                            try:
+                                self.register_with_server()
+                            except Exception as e:
+                                logger.error(f"重新注册失败: {e}")
+
+                            # 异步补传截图
+                            if self.screenshot_manager:
+                                threading.Thread(
+                                    target=self.upload_cached_screenshots, daemon=True
+                                ).start()
+                        else:
+                            consecutive_failures = 0
+                            check_interval = base_interval
                     else:
-                        consecutive_failures = 0
-                else:
-                    consecutive_failures += 1
-            except:
-                consecutive_failures += 1
+                        consecutive_failures += 1
 
-            # 连续失败5次，切换到离线模式
-            if consecutive_failures >= 5 and not self.offline_mode:
-                logger.warning("网络连接失败，切换到离线模式")
-                self.offline_mode = True
+                except requests.RequestException as e:
+                    logger.debug(f"健康检测失败: {e}")
+                    consecutive_failures += 1
+
+                # ========== 服务器故障处理 ==========
+                if consecutive_failures >= 3:
+                    logger.warning("服务器连接失败，尝试切换服务器")
+
+                    current_server_index = (current_server_index + 1) % len(
+                        self.server_urls
+                    )
+
+                    new_server = self.server_urls[current_server_index]
+
+                    logger.warning(f"切换服务器 → {new_server}")
+
+                    self.current_server = new_server
+
+                    # 更新API客户端
+                    self.api_client = APIClient(
+                        self.current_server,
+                        retry_times=self.retry_times,
+                        retry_delay=self.retry_delay,
+                    )
+
+                    consecutive_failures = 0
+
+                    # 所有服务器都尝试后进入离线模式
+                    if current_server_index == 0:
+                        if not self.offline_mode:
+                            logger.warning("⚠️ 所有服务器不可用，进入离线模式")
+
+                            self.offline_mode = True
+
+                            if self.config_manager:
+                                self.config_manager.save()
+
+                # ========== 指数退避 ==========
+                if consecutive_failures > 0:
+                    check_interval = min(check_interval * 2, max_interval)
+
+                # ========== 随机抖动 ==========
+                jitter = random.uniform(0, 5)
+                adjusted_interval = check_interval + jitter
+
+                logger.debug(f"下次检测 {adjusted_interval:.1f}s 后")
+
+            # 可中断的短sleep（1秒，以便快速响应强制检查）
+            for _ in range(1):
+                if not self.running:
+                    return
+                time.sleep(1)
 
     def work_loop(self):
-        """主工作循环"""
+        """主工作循环 - 固定时间点截图 + 防抖"""
         logger.info(f"开始监控，员工ID: {self.employee_id}")
         logger.info(f"截图间隔: {self.interval}秒")
         logger.info(f"图片格式: {self.format}")
 
+        import math
+
         last_sync = 0
         consecutive_failures = 0
         last_screenshot_path = None
+        last_screenshot_time = 0  # 记录上次实际截图时间，用于防抖
+
+        # 计算下一个截图时间点（对齐到整分钟/整间隔）
+        now = time.time()
+        next_screenshot = math.ceil(now / self.interval) * self.interval
+        logger.info(
+            f"首次截图时间点: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(next_screenshot))}"
+        )
 
         while self.running:
             try:
@@ -594,18 +902,59 @@ class MonitorClient:
                     time.sleep(5)
                     continue
 
+                now = time.time()
+
+                # ===== 立即截图请求处理 =====
                 if self.take_screenshot_now:
                     self.take_screenshot_now = False
                     logger.info("执行立即截图")
-                else:
-                    for _ in range(self.interval):
-                        if not self.running or self.paused:
-                            break
+
+                    # 立即截图
+                    image_path = self._take_and_process_screenshot(
+                        last_screenshot_path, consecutive_failures
+                    )
+                    if image_path:
+                        last_screenshot_path = image_path
+                        last_screenshot_time = now
+
+                    # 立即截图后，重新计算下一个截图时间点，避免打乱节奏
+                    next_screenshot = math.ceil(now / self.interval) * self.interval
+                    logger.debug(
+                        f"立即截图后，下次截图时间调整为: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(next_screenshot))}"
+                    )
+
+                # ===== 定时截图检查 =====
+                elif now >= next_screenshot:
+                    # 防抖检查：避免在极短时间内重复截图（比如1秒内）
+                    if now - last_screenshot_time < 2:  # 2秒内不重复截图
+                        logger.debug(
+                            f"截图太频繁（上次截图在{now - last_screenshot_time:.1f}秒前），跳过本次"
+                        )
+                        # 仍然需要更新时间点，避免卡死
+                        next_screenshot = math.ceil(now / self.interval) * self.interval
                         time.sleep(1)
+                        continue
 
-                now = time.time()
+                    logger.debug(
+                        f"到达截图时间点: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))}"
+                    )
 
-                # 同步配置（每10分钟）
+                    # 执行截图和上传
+                    image_path = self._take_and_process_screenshot(
+                        last_screenshot_path, consecutive_failures
+                    )
+
+                    if image_path:
+                        last_screenshot_path = image_path
+                        last_screenshot_time = now
+
+                    # 计算下一个截图时间点（保持固定间隔）
+                    next_screenshot = math.ceil(now / self.interval) * self.interval
+                    logger.debug(
+                        f"下次截图时间点: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(next_screenshot))}"
+                    )
+
+                # ===== 同步配置（每10分钟） =====
                 if now - last_sync > 600 and not self.offline_mode:
                     try:
                         config = self.api_client.get(
@@ -613,55 +962,94 @@ class MonitorClient:
                         )
                         if config:
                             self._update_config_from_server(config)
-                    except:
-                        pass
+                            # 如果配置的间隔变了，重新计算下一个截图时间点
+                            new_interval = config.get("interval")
+                            if new_interval and new_interval != self.interval:
+                                logger.info(
+                                    f"截图间隔已从 {self.interval}秒 变为 {new_interval}秒，重新计算时间点"
+                                )
+                                self.interval = new_interval
+                                next_screenshot = (
+                                    math.ceil(now / self.interval) * self.interval
+                                )
+                    except Exception as e:
+                        logger.debug(f"同步配置失败: {e}")
                     last_sync = now
 
-                # 截图
-                image_path = self.screenshot_manager.take_screenshot()
-                if image_path:
-                    with self.stats_lock:
-                        self.stats["screenshots_taken"] += 1
-
-                    # 检查是否与上一张相似
-                    if last_screenshot_path and self.screenshot_manager.are_similar(
-                        last_screenshot_path, image_path
-                    ):
-                        logger.debug("屏幕内容无变化，跳过上传")
-                        os.remove(image_path)
-                        consecutive_failures = 0
-                    else:
-                        # 上传截图
-                        if self.upload_screenshot(image_path):
-                            consecutive_failures = 0
-                            if last_screenshot_path and os.path.exists(
-                                last_screenshot_path
-                            ):
-                                try:
-                                    os.remove(last_screenshot_path)
-                                except:
-                                    pass
-                            self.screenshot_manager.last_screenshot_path = image_path
-                            last_screenshot_path = image_path
-                        else:
-                            consecutive_failures += 1
-                            logger.warning(
-                                f"上传失败，保留本地文件 (连续失败: {consecutive_failures})"
-                            )
-
-                            if consecutive_failures > 5:
-                                self.interval = min(self.interval * 2, 3600)
-                                logger.warning(
-                                    f"连续失败次数过多，调整截图间隔为: {self.interval}秒"
-                                )
-                                self.config_manager.set("interval", self.interval)
+                # 动态计算等待时间（避免CPU占用）
+                # 如果距离下次截图时间还早，可以适当延长休眠时间
+                time_to_next = next_screenshot - time.time()
+                if time_to_next > 5:
+                    # 如果离下次截图还有5秒以上，先睡2秒再继续检查
+                    sleep_time = min(2, time_to_next - 1)
+                    time.sleep(sleep_time)
+                else:
+                    # 快到了，每秒检查一次
+                    time.sleep(1)
 
             except Exception as e:
                 logger.error(f"工作循环出错: {e}")
                 self.add_error(e)
                 time.sleep(60)
 
-    def start(self):
+    def _take_and_process_screenshot(self, last_screenshot_path, consecutive_failures):
+        """
+        抽取截图处理逻辑为独立方法，避免代码重复
+        返回新截图的路径，如果没有截图或处理失败返回None
+        """
+        try:
+            # 截图
+            image_path = self.screenshot_manager.take_screenshot()
+            if not image_path:
+                logger.error("截图失败")
+                return None
+
+            with self.stats_lock:
+                self.stats["screenshots_taken"] += 1
+
+            # 检查是否与上一张相似
+            if last_screenshot_path and self.screenshot_manager.are_similar(
+                last_screenshot_path, image_path
+            ):
+                logger.debug("屏幕内容无变化，跳过上传")
+                os.remove(image_path)
+                consecutive_failures = 0  # 重置失败计数
+                return None
+            else:
+                # 上传截图
+                if self.upload_screenshot(image_path):
+                    consecutive_failures = 0
+                    # 删除上一张截图（如果存在）
+                    if last_screenshot_path and os.path.exists(last_screenshot_path):
+                        try:
+                            os.remove(last_screenshot_path)
+                            logger.debug(f"已删除上一张截图: {last_screenshot_path}")
+                        except Exception as e:
+                            logger.debug(f"删除上一张截图失败: {e}")
+                    self.screenshot_manager.last_screenshot_path = image_path
+                    return image_path
+                else:
+                    consecutive_failures += 1
+                    logger.warning(
+                        f"上传失败，保留本地文件 (连续失败: {consecutive_failures})"
+                    )
+
+                    if consecutive_failures > 5:
+                        # 连续失败次数过多，调整截图间隔
+                        new_interval = min(self.interval * 2, 3600)
+                        if new_interval != self.interval:
+                            logger.warning(
+                                f"连续失败次数过多，调整截图间隔为: {new_interval}秒"
+                            )
+                            self.interval = new_interval
+                            self.config_manager.set("interval", self.interval)
+                    return None
+
+        except Exception as e:
+            logger.error(f"截图处理过程出错: {e}")
+            return None
+
+    def start(self, silent_mode=False):
         """启动监控"""
         logger.info("=" * 50)
         logger.info("员工监控系统客户端 v3.0")
@@ -672,8 +1060,8 @@ class MonitorClient:
             logger.error("配置验证失败，程序退出")
             return
 
-        # 注册到服务器
-        if not self.register_with_server():
+        # 注册到服务器（传递 silent_mode 参数）
+        if not self.register_with_server(silent_mode=silent_mode):
             logger.warning("注册失败，将以离线模式运行")
             self.offline_mode = True
 
@@ -703,7 +1091,6 @@ class MonitorClient:
 
         logger.info("监控程序启动成功")
 
-        # ===== 修改这里 =====
         # 运行托盘图标 - 放在独立线程中
         if self.tray:
             # 在新线程中运行托盘图标
@@ -1048,6 +1435,11 @@ def main():
     parser.add_argument("--format", choices=["webp", "jpg", "jpeg"], help="图片格式")
     parser.add_argument("--encrypt", action="store_true", help="启用加密")
     parser.add_argument("--version", action="version", version="员工监控系统客户端 3.0")
+    # ===== 可选：添加静默模式参数 =====
+    parser.add_argument(
+        "--silent", action="store_true", help="静默模式，不显示交互界面"
+    )
+    # ================================
 
     args = parser.parse_args()
 
@@ -1084,9 +1476,14 @@ def main():
         if args.test:
             client.test_mode()
         elif args.register:
-            client.register_with_server()
+            # ===== 修改：加上 silent_mode 参数 =====
+            client.register_with_server(silent_mode=args.silent)
+            # ======================================
         else:
-            client.start()
+            # ===== 修改：start 方法内部会调用 register_with_server =====
+            # 需要在 start 方法中修改调用方式
+            client.start(silent_mode=args.silent)  # ← 如果 start 也需要
+            # =======================================================
     except KeyboardInterrupt:
         print("\n程序被用户中断")
     except Exception as e:

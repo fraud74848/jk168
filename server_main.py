@@ -36,6 +36,8 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
 from pydantic import BaseModel
+from sqlalchemy import exists, and_, or_, select
+from sqlalchemy.orm import selectinload
 
 import server_models as models
 import server_schemas as schemas
@@ -728,8 +730,9 @@ async def upload_screenshot(
     format: str = Form("webp"),
     file: UploadFile = File(...),
 ):
-    """上传截图"""
-    # 验证文件类型
+    """上传截图 - 优化版：确保更新客户端最后在线时间"""
+
+    # ========== 1. 验证文件类型 ==========
     allowed_extensions = {"jpg", "jpeg", "png", "webp", "bmp"}
     file_ext = file.filename.split(".")[-1].lower()
     if file_ext not in allowed_extensions:
@@ -738,20 +741,41 @@ async def upload_screenshot(
     from server_timezone import get_beijing_now
     from datetime import datetime
 
-    # ===== 获取北京时间 =====
+    # ========== 2. 获取北京时间 ==========
     beijing_now = get_beijing_now()
-    # ======================
 
-    # 解析时间
+    # ========== 3. 解析截图时间 ==========
     try:
         if timestamp:
             screenshot_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
         else:
-            screenshot_time = beijing_now  # 使用北京时间
+            screenshot_time = beijing_now
     except:
-        screenshot_time = beijing_now  # 使用北京时间
+        screenshot_time = beijing_now
 
-    # 查找或创建员工
+    # ========== 4. 处理客户端（关键修复点）==========
+    client = None
+    if client_id:
+        client = (
+            db.query(models.Client).filter(models.Client.client_id == client_id).first()
+        )
+
+    if client:
+        # ✅ 重要：更新客户端的最后在线时间
+        client.last_seen = beijing_now
+        logger.debug(f"客户端 {client_id} 最后在线时间已更新为 {beijing_now}")
+
+        # 如果客户端还没有关联员工ID，则关联
+        if not client.employee_id:
+            client.employee_id = employee_id
+            logger.info(f"客户端 {client_id} 已关联员工 {employee_id}")
+    else:
+        # 客户端不存在，但提供了client_id - 可能是新客户端
+        if client_id:
+            logger.warning(f"客户端 {client_id} 不存在，将创建新客户端记录")
+            # 这里可以选择自动创建客户端，或者只是记录日志
+
+    # ========== 5. 查找或创建员工 ==========
     employee = (
         db.query(models.Employee)
         .filter(models.Employee.employee_id == employee_id)
@@ -760,30 +784,21 @@ async def upload_screenshot(
 
     if not employee:
         # 自动创建员工
+        employee_name = (
+            f"{computer_name} - {windows_user}" if windows_user else computer_name
+        )
         employee = models.Employee(
             employee_id=employee_id,
-            name=f"{computer_name} - {windows_user}" if windows_user else computer_name,
+            name=employee_name,
             computer_name=computer_name,
             windows_user=windows_user,
             department="自动注册",
             status="active",
         )
         db.add(employee)
-        logger.info(f"自动创建员工: {employee_id}")
+        logger.info(f"✅ 自动创建员工: {employee_id} - {employee_name}")
 
-    # ===== 修改点：更新客户端时也使用北京时间 =====
-    # 更新客户端
-    if client_id:
-        client = (
-            db.query(models.Client).filter(models.Client.client_id == client_id).first()
-        )
-        if client:
-            client.last_seen = beijing_now  # 原来是 datetime.utcnow()
-            if not client.employee_id:
-                client.employee_id = employee_id
-    # ============================================
-
-    # 保存文件
+    # ========== 6. 保存文件 ==========
     date_str = screenshot_time.strftime("%Y-%m-%d")
     safe_employee_id = employee_id.replace("\\", os.path.sep)
 
@@ -804,16 +819,15 @@ async def upload_screenshot(
     # 获取文件大小
     file_size = file_path.stat().st_size
 
-    # 创建缩略图（异步）
+    # ========== 7. 创建缩略图（异步）==========
     thumbnail_path = (
         THUMBNAIL_PATH
         / f"{safe_employee_id}/{date_str}/{screenshot_time.strftime('%H-%M-%S')}.webp"
     )
     thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
-
     background_tasks.add_task(create_thumbnail, str(file_path), str(thumbnail_path))
 
-    # 获取图片尺寸
+    # ========== 8. 获取图片尺寸 ==========
     try:
         from PIL import Image
 
@@ -822,7 +836,7 @@ async def upload_screenshot(
     except:
         width = height = 0
 
-    # 保存记录
+    # ========== 9. 保存截图记录 ==========
     screenshot = models.Screenshot(
         employee_id=employee_id,
         client_id=client_id,
@@ -846,8 +860,11 @@ async def upload_screenshot(
     db.add(screenshot)
     db.commit()
 
-    logger.info(f"✅ 截图保存成功: {filename} ({file_size/1024:.1f}KB)")
+    logger.info(
+        f"✅ 截图保存成功: {filename} ({file_size/1024:.1f}KB) - 员工: {employee_id}"
+    )
 
+    # ========== 10. 返回结果 ==========
     return {
         "success": True,
         "id": screenshot.id,
@@ -856,6 +873,9 @@ async def upload_screenshot(
             f"/screenshots/{screenshot.thumbnail}" if screenshot.thumbnail else None
         ),
         "size": file_size,
+        "employee_id": employee_id,
+        "client_id": client_id,
+        "timestamp": screenshot_time.isoformat(),
     }
 
 
@@ -898,10 +918,10 @@ async def upload_batch(
 
 
 # ==================== 员工管理接口 ====================
-@app.get("/api/employees", tags=["员工"])  # 移除 response_model
+@app.get("/api/employees", tags=["员工"])
 def get_employees(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,
     status: Optional[str] = None,
     online_only: Optional[bool] = None,
     search: Optional[str] = None,
@@ -909,19 +929,29 @@ def get_employees(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """
-    获取员工列表（支持分页、搜索和状态筛选）
+    获取员工列表（生产级版本）
+    支持：
+    - 分页
+    - 搜索
+    - 状态筛选
+    - 在线状态筛选
     """
-    from datetime import datetime, timedelta
-    from sqlalchemy import or_
+    logger = logging.getLogger(__name__)
+    logger.debug(
+        f"员工列表请求 - skip:{skip}, limit:{limit}, status:{status}, online_only:{online_only}, search:{search}"
+    )
 
-    # 构建基础查询
+    # 在线判断时间（10分钟内在线）
+    cutoff = datetime.utcnow() - timedelta(minutes=10)
+
+    # 基础查询
     query = db.query(models.Employee)
 
     # 状态筛选
     if status:
         query = query.filter(models.Employee.status == status)
 
-    # 搜索筛选
+    # 搜索
     if search:
         search_term = f"%{search}%"
         query = query.filter(
@@ -933,53 +963,45 @@ def get_employees(
             )
         )
 
-    # 获取总数（在应用在线筛选之前）
-    total_before_online = query.count()
-
-    # 获取所有符合条件的员工（用于在线筛选）
-    all_employees = query.all()
-
-    # 在线/离线筛选
+    # 在线筛选（数据库级）
     if online_only is not None:
-        cutoff = datetime.utcnow() - timedelta(minutes=10)
-        filtered_employees = []
-
-        for emp in all_employees:
-            has_online = any(
-                client.last_seen
-                and (
-                    client.last_seen.replace(tzinfo=None)
-                    if client.last_seen.tzinfo
-                    else client.last_seen
-                )
-                >= cutoff
-                for client in emp.clients
+        # 正确的 exists 子查询
+        online_subquery = exists().where(
+            and_(
+                models.Client.employee_id == models.Employee.employee_id,
+                models.Client.last_seen >= cutoff,
             )
+        )
 
-            if online_only and has_online:
-                filtered_employees.append(emp)
-            elif not online_only and not has_online:
-                filtered_employees.append(emp)
+        if online_only:
+            query = query.filter(online_subquery)
+            logger.debug(f"应用在线筛选，时间阈值: {cutoff}")
+        else:
+            query = query.filter(~online_subquery)
+            logger.debug(f"应用离线筛选，时间阈值: {cutoff}")
 
-        employees = filtered_employees
-        total = len(employees)  # 在线筛选后的总数
-    else:
-        employees = all_employees
-        total = total_before_online
+    # 总数统计
+    total = query.count()
 
-    # 应用分页
-    paginated_employees = (
-        employees[skip : skip + limit] if skip < len(employees) else []
+    # 分页 + 预加载 clients
+    employees = (
+        query.options(selectinload(models.Employee.clients))
+        .offset(skip)
+        .limit(limit)
+        .all()
     )
 
-    # 转换为字典并添加统计信息
-    result = []
-    for emp in paginated_employees:
-        emp_dict = emp.to_dict()
-        result.append(emp_dict)
+    # 转换为 dict
+    items = [emp.to_dict() for emp in employees]
 
-    # ✅ 返回统一格式，与截图接口保持一致
-    return {"items": result, "total": total, "skip": skip, "limit": limit}
+    logger.debug(f"返回 {len(items)} 条记录，总数: {total}")
+
+    return {
+        "items": items,
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
 
 
 # ===== 修改点1：日期路由必须放在最前面，使用 path 参数 =====
