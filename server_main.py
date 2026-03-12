@@ -1275,41 +1275,47 @@ def get_screenshots(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """获取截图列表（支持分页和时间筛选）"""
+    """获取截图列表（支持多种时间筛选方式）"""
 
     from sqlalchemy import text
     import logging
-    from datetime import datetime
+    from datetime import datetime, timedelta
+    import re
 
     logger = logging.getLogger(__name__)
 
     try:
         # ==============================
-        # 1. 参数验证和预处理
+        # 1. 参数验证
         # ==============================
-
-        # 验证分页参数
         if skip < 0 or limit < 1 or limit > 1000:
             raise HTTPException(status_code=400, detail="无效的分页参数")
 
-        # ✅ 修复：放宽日期格式验证，支持完整时间字符串
-        # 日期格式可以是 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS
-        date_pattern = r"^\d{4}-\d{2}-\d{2}(\s\d{2}:\d{2}:\d{2})?$"
+        # 日期格式验证（支持 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS）
+        date_pattern = r"^\d{4}-\d{2}-\d{2}$"
+        datetime_pattern = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$"
         time_pattern = r"^\d{2}:\d{2}(:\d{2})?$"
 
-        import re
+        # 验证 start_date 格式
+        if start_date:
+            if not (
+                re.match(date_pattern, start_date)
+                or re.match(datetime_pattern, start_date)
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="开始日期格式应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS",
+                )
 
-        # 验证日期参数（允许带时间）
-        if start_date and not re.match(date_pattern, start_date):
-            raise HTTPException(
-                status_code=400,
-                detail="开始日期格式应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS",
-            )
-        if end_date and not re.match(date_pattern, end_date):
-            raise HTTPException(
-                status_code=400,
-                detail="结束日期格式应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS",
-            )
+        # 验证 end_date 格式
+        if end_date:
+            if not (
+                re.match(date_pattern, end_date) or re.match(datetime_pattern, end_date)
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="结束日期格式应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS",
+                )
 
         # 验证时间参数
         if start_time and not re.match(time_pattern, start_time):
@@ -1324,8 +1330,6 @@ def get_screenshots(
         # ==============================
         # 2. 构建基础查询
         # ==============================
-
-        # 注意：这里不能简单替换，需要单独构建count查询
         base_sql = """
             FROM screenshots s
             LEFT JOIN employees e ON s.employee_id = e.employee_id
@@ -1365,63 +1369,77 @@ def get_screenshots(
             params["client_id"] = client_id
 
         # ==============================
-        # 3. 日期时间处理（修复版）
+        # 3. 智能时间处理（支持所有组合）
         # ==============================
 
-        # 处理带日期的时间范围
-        if start_date and start_time:
-            # 合并日期和时间
-            start_datetime = f"{start_date} {start_time}"
-            if len(start_time) == 5:  # HH:MM 格式
-                start_datetime += ":00"
-            base_sql += " AND s.screenshot_time >= :start_datetime"
-            params["start_datetime"] = start_datetime
+        # 处理开始时间
+        start_datetime = None
+        if start_date and re.match(datetime_pattern, start_date):
+            # 情况1：start_date 已经包含时间（如 "2026-03-11 09:00:00"）
+            start_datetime = f"{start_date}+08:00"
+            logger.debug(f"开始时间(已包含时间): {start_datetime}")
+        elif start_date and start_time:
+            # 情况2：分开的日期和时间
+            time_str = start_time if len(start_time) == 8 else f"{start_time}:00"
+            start_datetime = f"{start_date} {time_str}+08:00"
+            logger.debug(f"开始时间(日期+时间): {start_datetime}")
         elif start_date:
-            # 只有日期，从当天开始
-            base_sql += " AND s.screenshot_time >= :start_date"
-            params["start_date"] = f"{start_date} 00:00:00"
+            # 情况3：只有日期，使用当天开始时间
+            start_datetime = f"{start_date} 00:00:00+08:00"
+            logger.debug(f"开始时间(只有日期): {start_datetime}")
         elif start_time:
-            # 只有时间，使用今天日期
+            # 情况4：只有时间，使用今天日期
             today = datetime.now().strftime("%Y-%m-%d")
-            start_datetime = f"{today} {start_time}"
-            if len(start_time) == 5:
-                start_datetime += ":00"
+            time_str = start_time if len(start_time) == 8 else f"{start_time}:00"
+            start_datetime = f"{today} {time_str}+08:00"
+            logger.debug(f"开始时间(只有时间): {start_datetime}")
+
+        if start_datetime:
             base_sql += " AND s.screenshot_time >= :start_datetime"
             params["start_datetime"] = start_datetime
 
-        if end_date and end_time:
-            # 合并日期和时间
-            end_datetime = f"{end_date} {end_time}"
-            if len(end_time) == 5:
-                end_datetime += ":59"
-            base_sql += " AND s.screenshot_time <= :end_datetime"
-            params["end_datetime"] = end_datetime
+        # 处理结束时间
+        end_datetime = None
+        if end_date and re.match(datetime_pattern, end_date):
+            # 情况1：end_date 已经包含时间
+            end_datetime = f"{end_date}+08:00"
+            logger.debug(f"结束时间(已包含时间): {end_datetime}")
+        elif end_date and end_time:
+            # 情况2：分开的日期和时间
+            time_str = end_time if len(end_time) == 8 else f"{end_time}:59"
+            end_datetime = f"{end_date} {time_str}+08:00"
+            logger.debug(f"结束时间(日期+时间): {end_datetime}")
         elif end_date:
-            # 只有日期，到当天结束
-            base_sql += " AND s.screenshot_time <= :end_date"
-            params["end_date"] = f"{end_date} 23:59:59"
+            # 情况3：只有日期，使用当天结束时间
+            end_datetime = f"{end_date} 23:59:59+08:00"
+            logger.debug(f"结束时间(只有日期): {end_datetime}")
         elif end_time:
-            # 只有时间，使用今天日期
+            # 情况4：只有时间，使用今天日期
             today = datetime.now().strftime("%Y-%m-%d")
-            end_datetime = f"{today} {end_time}"
-            if len(end_time) == 5:
-                end_datetime += ":59"
+            time_str = end_time if len(end_time) == 8 else f"{end_time}:59"
+            end_datetime = f"{today} {time_str}+08:00"
+            logger.debug(f"结束时间(只有时间): {end_datetime}")
+
+        if end_datetime:
             base_sql += " AND s.screenshot_time <= :end_datetime"
             params["end_datetime"] = end_datetime
+
+        # 验证时间范围（如果两个都有）
+        if start_datetime and end_datetime:
+            # 可以添加时间范围验证，确保 start <= end
+            logger.info(f"时间范围: {start_datetime} 至 {end_datetime}")
 
         # ==============================
         # 4. 获取总数
         # ==============================
-
         count_sql = f"SELECT COUNT(*) {base_sql}"
         total = db.execute(text(count_sql), params).scalar() or 0
 
         # ==============================
-        # 5. 大分页优化（保留第一个接口的优点）
+        # 5. 分页
         # ==============================
-
         if skip >= 1000:
-            # 使用游标方式优化大分页
+            # 游标方式优化大分页
             cursor_sql = f"""
                 SELECT screenshot_time 
                 {base_sql} 
@@ -1437,13 +1455,11 @@ def get_screenshots(
                 base_sql += " AND s.screenshot_time <= :cursor_time"
                 params["cursor_time"] = cursor_time
 
-            # 重置skip，使用游标后不需要offset
             sql = (
                 f"{select_sql} {base_sql} ORDER BY s.screenshot_time DESC LIMIT :limit"
             )
             params["limit"] = limit
         else:
-            # 小偏移量直接使用OFFSET
             sql = f"{select_sql} {base_sql} ORDER BY s.screenshot_time DESC OFFSET :skip LIMIT :limit"
             params["skip"] = skip
             params["limit"] = limit
@@ -1451,15 +1467,12 @@ def get_screenshots(
         # ==============================
         # 6. 执行查询
         # ==============================
-
         result = db.execute(text(sql), params).fetchall()
 
         # ==============================
-        # 7. 数据转换（复用format_size函数）
+        # 7. 数据转换
         # ==============================
-
         def format_file_size(size):
-            """格式化文件大小"""
             if not size:
                 return "0 B"
             for unit in ["B", "KB", "MB", "GB"]:
@@ -1472,6 +1485,14 @@ def get_screenshots(
         for row in result:
             row_dict = dict(row._mapping)
             st = row_dict.get("screenshot_time")
+
+            # 处理带时区的时间
+            screenshot_time_str = None
+            if st:
+                if hasattr(st, "isoformat"):
+                    screenshot_time_str = st.isoformat()
+                else:
+                    screenshot_time_str = str(st)
 
             screenshot = {
                 "id": row_dict.get("id"),
@@ -1489,7 +1510,7 @@ def get_screenshots(
                     if row_dict.get("uploaded_at")
                     else None
                 ),
-                "screenshot_time": st.isoformat() if st else None,
+                "screenshot_time": screenshot_time_str,
                 "computer_name": row_dict.get("computer_name"),
                 "windows_user": row_dict.get("windows_user"),
                 "image_format": row_dict.get("image_format"),
@@ -1505,7 +1526,7 @@ def get_screenshots(
             screenshots.append(screenshot)
 
         logger.info(
-            f"截图查询成功: 条件(employee={employee_id}, date={start_date}~{end_date}), 总数={total}, 返回={len(screenshots)}条"
+            f"截图查询成功: 条件(employee={employee_id}), 总数={total}, 返回={len(screenshots)}条"
         )
 
         return {
@@ -1976,7 +1997,7 @@ def get_cleanup_status(
 ):
     """获取清理状态 - 优化版"""
 
-    from server_timezone import get_beijing_now, utc_to_beijing
+    from server_timezone import get_beijing_now, to_beijing_time
     from sqlalchemy import func
     import logging
 
@@ -2019,7 +2040,7 @@ def get_cleanup_status(
         last_cleanup_time = None
         if last_cleanup and last_cleanup.created_at:
             # 假设数据库存储的是UTC，转换为北京时间
-            last_cleanup_time = utc_to_beijing(last_cleanup.created_at)
+            last_cleanup_time = to_beijing_time(last_cleanup.created_at)
             logger.debug(
                 f"上次清理时间(UTC): {last_cleanup.created_at}, (北京): {last_cleanup_time}"
             )
