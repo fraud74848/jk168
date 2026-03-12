@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
 import os
+import sys
 import uuid
 import logging
 import asyncio
@@ -105,19 +106,133 @@ cleanup = DataCleanup()
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时的初始化"""
+    """应用启动时的初始化 - 增强版文件系统检查"""
     logger.info("=" * 50)
-    logger.info("员工监控系统服务器启动")
-    logger.info(f"数据库: {Config.PRIMARY_DATABASE_URL}")
-    logger.info(f"存储路径: {STORAGE_PATH}")
-    logger.info(f"自动清理: {'启用' if Config.AUTO_CLEANUP_ENABLED else '禁用'}")
-    logger.info(f"数据保留: {Config.SCREENSHOT_RETENTION_HOURS}小时")
+    logger.info("🚀 员工监控系统服务器启动")
     logger.info("=" * 50)
 
-    # 启动清理任务
+    # ===== 1. 数据库信息 =====
+    logger.info("📊 数据库配置:")
+    # 隐藏密码，只显示连接信息
+    db_url_display = Config.PRIMARY_DATABASE_URL
+    if "@" in db_url_display:
+        parts = db_url_display.split("@")
+        auth_part = parts[0].split(":")
+        if len(auth_part) > 2:
+            db_url_display = f"{auth_part[0]}:****@{parts[1]}"
+    logger.info(f"   - 主数据库: {db_url_display}")
+    logger.info(f"   - 存储路径: {STORAGE_PATH}")
+    logger.info(
+        f"   - 自动清理: {'✅ 启用' if Config.AUTO_CLEANUP_ENABLED else '❌ 禁用'}"
+    )
+    logger.info(f"   - 数据保留: {Config.SCREENSHOT_RETENTION_HOURS}小时")
+    logger.info(f"   - 清理间隔: {Config.CLEANUP_INTERVAL/3600:.1f}小时")
+
+    # ===== 2. 启动清理任务 =====
+    logger.info("=" * 50)
+    logger.info("🧹 启动清理任务...")
     asyncio.create_task(cleanup.start_cleanup_task())
+    logger.info("✅ 清理任务已启动")
 
-    # 创建默认管理员
+    # ===== 3. 文件系统检查 =====
+    logger.info("=" * 50)
+    logger.info("📁 文件系统检查:")
+
+    # 3.1 检查存储路径
+    logger.info(f"   存储路径: {STORAGE_PATH}")
+    if STORAGE_PATH.exists():
+        logger.info(f"   ✅ 存储路径存在")
+
+        # 检查权限
+        try:
+            test_file = STORAGE_PATH / ".write_test"
+            test_file.write_text("test")
+            test_file.unlink()
+            logger.info(f"   ✅ 存储路径可写")
+        except Exception as e:
+            logger.error(f"   ❌ 存储路径不可写: {e}")
+
+        # 统计文件
+        try:
+            webp_files = list(STORAGE_PATH.glob("**/*.webp"))
+            jpg_files = list(STORAGE_PATH.glob("**/*.jpg"))
+            png_files = list(STORAGE_PATH.glob("**/*.png"))
+
+            total_files = len(webp_files) + len(jpg_files) + len(png_files)
+            total_size = 0
+            for f in STORAGE_PATH.glob("**/*.*"):
+                if f.is_file():
+                    total_size += f.stat().st_size
+
+            logger.info(f"   📊 文件统计:")
+            logger.info(f"      - 总文件数: {total_files} 个")
+            logger.info(f"      - WebP文件: {len(webp_files)} 个")
+            logger.info(f"      - JPG文件: {len(jpg_files)} 个")
+            logger.info(f"      - PNG文件: {len(png_files)} 个")
+            logger.info(f"      - 总大小: {total_size / (1024*1024):.2f} MB")
+
+            # 显示前3个示例文件
+            if webp_files:
+                logger.info(f"   📸 示例截图 (WebP):")
+                for i, f in enumerate(webp_files[:3]):
+                    rel_path = f.relative_to(STORAGE_PATH)
+                    size_kb = f.stat().st_size / 1024
+                    logger.info(f"      {i+1}. {rel_path} ({size_kb:.1f}KB)")
+
+            # 检查员工目录结构
+            employee_dirs = [d for d in STORAGE_PATH.iterdir() if d.is_dir()]
+            logger.info(f"   👥 员工目录数: {len(employee_dirs)}")
+            if employee_dirs:
+                logger.info(f"      示例: {[d.name for d in employee_dirs[:5]]}")
+
+        except Exception as e:
+            logger.error(f"   ❌ 统计文件失败: {e}")
+    else:
+        logger.error(f"   ❌ 存储路径不存在!")
+        logger.info(f"   尝试创建目录...")
+        try:
+            STORAGE_PATH.mkdir(parents=True, exist_ok=True)
+            logger.info(f"   ✅ 存储路径创建成功")
+        except Exception as e:
+            logger.error(f"   ❌ 创建存储路径失败: {e}")
+
+    # 3.2 检查缩略图目录
+    logger.info(f"   缩略图路径: {THUMBNAIL_PATH}")
+    if THUMBNAIL_PATH.exists():
+        thumb_files = list(THUMBNAIL_PATH.glob("**/*.webp"))
+        logger.info(f"   ✅ 缩略图目录存在 ({len(thumb_files)} 个文件)")
+    else:
+        logger.info(f"   ⚠️ 缩略图目录不存在，将自动创建")
+        try:
+            THUMBNAIL_PATH.mkdir(parents=True, exist_ok=True)
+            logger.info(f"   ✅ 缩略图目录创建成功")
+        except Exception as e:
+            logger.error(f"   ❌ 创建缩略图目录失败: {e}")
+
+    # 3.3 检查磁盘空间
+    try:
+        import shutil
+
+        disk_usage = shutil.disk_usage(STORAGE_PATH)
+        free_gb = disk_usage.free / (1024**3)
+        total_gb = disk_usage.total / (1024**3)
+        used_percent = (disk_usage.used / disk_usage.total) * 100
+
+        logger.info(f"   💾 磁盘空间:")
+        logger.info(f"      - 总空间: {total_gb:.1f} GB")
+        logger.info(f"      - 已用: {used_percent:.1f}%")
+        logger.info(f"      - 剩余: {free_gb:.1f} GB")
+
+        if free_gb < 5:
+            logger.warning(f"   ⚠️ 磁盘空间不足! 剩余 {free_gb:.1f}GB")
+        else:
+            logger.info(f"   ✅ 磁盘空间充足")
+    except Exception as e:
+        logger.error(f"   ❌ 检查磁盘空间失败: {e}")
+
+    # ===== 4. 创建默认管理员 =====
+    logger.info("=" * 50)
+    logger.info("👤 管理员账户检查:")
     try:
         db = next(get_db())
         admin = (
@@ -131,16 +246,73 @@ async def startup_event():
                 username=Config.ADMIN_USERNAME,
                 password_hash=get_password_hash(Config.ADMIN_PASSWORD),
                 role="admin",
+                is_active=True,
             )
             db.add(admin)
             db.commit()
-            logger.info(f"✅ 默认管理员已创建: {Config.ADMIN_USERNAME}")
+            logger.info(f"   ✅ 默认管理员已创建: {Config.ADMIN_USERNAME}")
         else:
-            logger.info(f"✅ 管理员用户已存在: {Config.ADMIN_USERNAME}")
+            logger.info(f"   ✅ 管理员用户已存在: {Config.ADMIN_USERNAME}")
+
+        # 统计用户数量
+        user_count = db.query(models.User).count()
+        logger.info(f"   👥 系统用户数: {user_count}")
 
         db.close()
     except Exception as e:
-        logger.error(f"创建管理员失败: {e}")
+        logger.error(f"   ❌ 管理员检查失败: {e}")
+
+    # ===== 5. 数据库表统计 =====
+    logger.info("=" * 50)
+    logger.info("📊 数据库统计:")
+    try:
+        db = next(get_db())
+
+        # 统计各表记录数
+        screenshot_count = db.query(models.Screenshot).count()
+        employee_count = db.query(models.Employee).count()
+        client_count = db.query(models.Client).count()
+        activity_count = db.query(models.Activity).count()
+
+        logger.info(f"   📸 截图数: {screenshot_count}")
+        logger.info(f"   👤 员工数: {employee_count}")
+        logger.info(f"   💻 客户端数: {client_count}")
+        logger.info(f"   📝 活动日志: {activity_count}")
+
+        # 检查最近的活动
+        if activity_count > 0:
+            latest_activity = (
+                db.query(models.Activity)
+                .order_by(models.Activity.created_at.desc())
+                .first()
+            )
+            logger.info(
+                f"   ⏱️ 最近活动: {latest_activity.action} ({latest_activity.created_at})"
+            )
+
+        db.close()
+    except Exception as e:
+        logger.error(f"   ❌ 数据库统计失败: {e}")
+
+    # ===== 6. 环境信息 =====
+    logger.info("=" * 50)
+    logger.info("🌍 环境信息:")
+    logger.info(f"   - Python版本: {sys.version}")
+    logger.info(f"   - 当前目录: {os.getcwd()}")
+    logger.info(f"   - 调试模式: {Config.DEBUG}")
+    logger.info(f"   - 日志级别: {Config.LOG_LEVEL}")
+
+    # 检查环境变量
+    important_envs = ["DATABASE_URL", "REDIS_URL", "SECRET_KEY"]
+    for env in important_envs:
+        value = os.environ.get(env, "未设置")
+        if env == "SECRET_KEY" and value != "未设置":
+            value = "已设置(隐藏)"
+        logger.info(f"   - {env}: {value}")
+
+    logger.info("=" * 50)
+    logger.info("✅ 服务器启动完成!")
+    logger.info("=" * 50)
 
 
 # ==================== 健康检查 ====================
@@ -2302,61 +2474,129 @@ def regenerate_api_key(
     return {"api_key": new_api_key}
 
 
+@app.get("/api/debug/file/{path:path}", tags=["调试"])
+async def debug_file_access(path: str):
+    """调试接口：检查文件访问"""
+
+    result = {"requested_path": path, "checks": [], "found": False}
+
+    # 可能的根目录
+    root_paths = [
+        Path(Config.SCREENSHOT_DIR),
+        Path("/data/screenshots"),
+        Path.cwd() / "screenshots",
+        Path.cwd(),
+    ]
+
+    for root in root_paths:
+        if not root.exists():
+            result["checks"].append(
+                {"root": str(root), "exists": False, "message": "目录不存在"}
+            )
+            continue
+
+        # 尝试直接拼接
+        file_path = root / path
+        resolved = file_path.resolve()
+
+        check = {
+            "root": str(root),
+            "root_exists": True,
+            "attempted_path": str(file_path),
+            "resolved_path": str(resolved),
+            "exists": resolved.exists(),
+            "is_file": resolved.is_file() if resolved.exists() else False,
+            "size": (
+                resolved.stat().st_size
+                if resolved.exists() and resolved.is_file()
+                else None
+            ),
+            "readable": os.access(resolved, os.R_OK) if resolved.exists() else False,
+        }
+
+        # 尝试添加 screenshots 前缀
+        if not path.startswith("screenshots/"):
+            alt_path = root / "screenshots" / path
+            alt_resolved = alt_path.resolve()
+            check["alt_path"] = str(alt_path)
+            check["alt_exists"] = alt_resolved.exists()
+
+        result["checks"].append(check)
+
+        if check["exists"] and check["is_file"]:
+            result["found"] = True
+            result["found_at"] = str(resolved)
+
+    return result
+
+
 # ==================== 静态文件服务 ====================
 
-# 1. 先挂载截图目录（必须放在前面）
-screenshots_path = Path("/data/screenshots")
+# 1. 截图目录处理（使用第二个版本的健壮实现）
+screenshots_path = Path(Config.SCREENSHOT_DIR)
+logger.info(f"配置的截图目录: {screenshots_path}")
+
+# 检查主目录
 if screenshots_path.exists():
     app.mount(
-        "/screenshots", StaticFiles(directory="/data/screenshots"), name="screenshots"
+        "/screenshots", StaticFiles(directory=str(screenshots_path)), name="screenshots"
     )
-    logger.info(f"✅ 截图目录已挂载: /data/screenshots")
+    logger.info(f"✅ 截图目录已挂载: /screenshots -> {screenshots_path}")
 
-    # 列出一些文件用于调试
-    try:
-        files = list(screenshots_path.glob("**/*.webp"))[:5]
-        if files:
-            logger.info(
-                f"📸 找到示例截图: {[str(f.relative_to(screenshots_path)) for f in files]}"
-            )
-    except Exception as e:
-        logger.error(f"❌ 读取截图目录失败: {e}")
+    # 调试信息
+    webp_files = list(screenshots_path.glob("**/*.webp"))
+    logger.info(f"找到 {len(webp_files)} 个 .webp 文件")
+    if webp_files:
+        sample_files = webp_files[:5]
+        logger.info(
+            f"示例截图路径: {[str(f.relative_to(screenshots_path)) for f in sample_files]}"
+        )
 else:
-    logger.warning(f"⚠️ 截图目录不存在: /data/screenshots")
+    # 备选方案
+    alt_screenshots_path = Path.cwd() / "screenshots"
+    if alt_screenshots_path.exists():
+        logger.info(f"使用备用截图目录: {alt_screenshots_path}")
+        app.mount(
+            "/screenshots",
+            StaticFiles(directory=str(alt_screenshots_path)),
+            name="screenshots",
+        )
+    else:
+        logger.error("=" * 50)
+        logger.error("❌ 无法找到截图目录！")
+        logger.error(
+            f"请创建目录或软链接: ln -s /actual/screenshots/path {Config.SCREENSHOT_DIR}"
+        )
+        logger.error("=" * 50)
 
-# 2. 定义前端文件目录
-static_dir = Path(".")
-index_path = static_dir / "index.html"
-
-if index_path.exists():
-    logger.info(f"✅ 找到 index.html，前端页面可访问")
-else:
-    logger.warning(f"⚠️ index.html 不存在于根目录")
-
-# 3. 挂载静态资源目录（js, css, 图片等）- 可选
-# 如果你有专门的静态资源目录，可以这样挂载
-assets_dir = static_dir / "assets"
+# 2. 静态资源目录（如assets）
+assets_dir = Path.cwd() / "assets"
 if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory="assets"), name="assets")
     logger.info(f"✅ 静态资源目录已挂载: /assets")
 
+# 3. 前端路由处理（使用第一个版本的前端路由）
+index_path = Path.cwd() / "index.html"
 
-# 4. 处理所有前端路由（关键修复）
+
+@app.get("/")
+async def serve_root():
+    """根路径返回 index.html"""
+    if index_path.exists():
+        return FileResponse(index_path)
+    return {"error": "Frontend not found"}, 404
+
+
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
-    """
-    处理所有前端路由：
-    - 如果是API请求，返回404（应该已经被前面的路由捕获）
-    - 如果是静态资源文件，直接返回
-    - 其他所有路径都返回 index.html
-    """
+    """处理所有前端路由（SPA支持）"""
 
     # 跳过API路径
-    if full_path.startswith("api/") or full_path == "api":
-        return {"error": "API endpoint not found"}, 404
+    if full_path.startswith(("api/", "screenshots/", "assets/")):
+        return {"error": "Resource not found"}, 404
 
-    # 检查是否是静态资源文件（有扩展名的）
-    static_extensions = [
+    # 检查是否是静态文件
+    static_extensions = (
         ".js",
         ".css",
         ".png",
@@ -2369,26 +2609,17 @@ async def serve_frontend(full_path: str):
         ".woff2",
         ".ttf",
         ".eot",
-    ]
+    )
 
-    if any(full_path.endswith(ext) for ext in static_extensions):
-        file_path = static_dir / full_path
+    if full_path.endswith(static_extensions):
+        file_path = Path.cwd() / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
 
-    # 其他所有路径都返回 index.html
+    # 其他所有路径返回 index.html（SPA路由）
     if index_path.exists():
         return FileResponse(index_path)
 
-    return {"error": "Frontend not found"}, 404
-
-
-# 5. 根路径处理
-@app.get("/")
-async def serve_root():
-    """访问根路径返回 index.html"""
-    if index_path.exists():
-        return FileResponse(index_path)
     return {"error": "Frontend not found"}, 404
 
 

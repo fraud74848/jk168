@@ -337,13 +337,24 @@ const getImageUrl = (path) => {
   // 使用当前域名
   const baseUrl = window.location.origin;
 
-  // 如果路径已经以 /screenshots 开头，直接拼接
+  let finalUrl;
   if (cleanPath.startsWith("/screenshots/")) {
-    return `${baseUrl}${cleanPath}`;
+    finalUrl = `${baseUrl}${cleanPath}`;
+  } else {
+    finalUrl = `${baseUrl}/screenshots${cleanPath.startsWith("/") ? "" : "/"}${cleanPath}`;
   }
 
-  // 否则添加 /screenshots 前缀
-  return `${baseUrl}/screenshots${cleanPath.startsWith("/") ? "" : "/"}${cleanPath}`;
+  // ✅ 添加调试日志（只打印前几个，避免刷屏）
+  if (Math.random() < 0.01) {
+    // 1%的概率打印，避免日志太多
+    console.log("图片URL转换:", {
+      original: path,
+      cleanPath: cleanPath,
+      finalUrl: finalUrl,
+    });
+  }
+
+  return finalUrl;
 };
 
 // ===== 加载员工列表并建立映射 =====
@@ -380,7 +391,6 @@ const loadEmployees = async () => {
 };
 
 // ===== ✅ 核心：加载截图列表（完全依赖后端分页）=====
-// ===== ✅ 核心：加载截图列表 =====
 const loadScreenshots = async () => {
   loading.value = true;
   try {
@@ -399,6 +409,7 @@ const loadScreenshots = async () => {
       // 时间滑块已经设置好了完整的日期时间
       params.start_date = filters.value.start_date;
       params.end_date = filters.value.end_date;
+      console.log("使用时间滑块日期:", params.start_date, params.end_date);
     }
     // 否则使用日期范围和时间选择器
     else if (filters.value.dateRange && filters.value.dateRange.length === 2) {
@@ -417,6 +428,7 @@ const loadScreenshots = async () => {
       } else {
         params.end_date = `${endDate} 23:59:59`;
       }
+      console.log("使用日期时间筛选:", params.start_date, params.end_date);
     } else {
       // 没有日期范围，只有时间筛选
       if (filters.value.startTime) {
@@ -425,35 +437,98 @@ const loadScreenshots = async () => {
       if (filters.value.endTime) {
         params.end_time = filters.value.endTime;
       }
+      console.log("使用时间筛选:", params.start_time, params.end_time);
     }
 
-    console.log("请求参数:", params);
+    console.log("最终请求参数:", params);
     const response = await screenshotApi.getScreenshots(params);
-    console.log("API返回:", response);
+    console.log("API返回状态:", {
+      hasItems: !!response?.items,
+      total: response?.total,
+      itemCount: response?.items?.length,
+    });
 
     // 处理返回数据
     if (response && typeof response === "object") {
       if (response.items) {
         screenshots.value = response.items;
         total.value = response.total || 0;
+
+        // ✅ 添加调试：检查第一张图片的加载
+        if (screenshots.value.length > 0) {
+          const firstItem = screenshots.value[0];
+          const imageUrl = getImageUrl(firstItem.storage_url || firstItem.url);
+
+          console.log("第一张图片详细信息:", {
+            id: firstItem.id,
+            employee_id: firstItem.employee_id,
+            name: firstItem.name,
+            storage_url: firstItem.storage_url,
+            url: firstItem.url,
+            thumbnail: firstItem.thumbnail,
+            imageUrl: imageUrl,
+          });
+
+          // 测试图片是否可加载
+          const img = new Image();
+          img.onload = () => {
+            console.log("✅ 图片加载成功:", {
+              url: imageUrl,
+              width: img.width,
+              height: img.height,
+            });
+          };
+          img.onerror = (e) => {
+            console.error("❌ 图片加载失败:", {
+              url: imageUrl,
+              error: e,
+              status: e?.target?.status,
+            });
+
+            // 尝试备用URL
+            if (firstItem.thumbnail) {
+              const thumbUrl = getImageUrl(firstItem.thumbnail);
+              console.log("尝试加载缩略图:", thumbUrl);
+              const thumbImg = new Image();
+              thumbImg.onload = () =>
+                console.log("✅ 缩略图加载成功:", thumbUrl);
+              thumbImg.onerror = () =>
+                console.error("❌ 缩略图也加载失败:", thumbUrl);
+              thumbImg.src = thumbUrl;
+            }
+          };
+          img.src = imageUrl;
+        } else {
+          console.log("没有截图数据");
+        }
       } else if (Array.isArray(response)) {
         screenshots.value = response;
         total.value = screenshots.value.length;
+        console.log("返回数组格式，长度:", screenshots.value.length);
       } else {
         screenshots.value = [];
         total.value = 0;
+        console.warn("API返回格式异常:", response);
       }
     } else {
       screenshots.value = [];
       total.value = 0;
+      console.warn("API返回为空或格式错误:", response);
     }
   } catch (error) {
-    console.error("加载截图失败:", error);
-    ElMessage.error("加载截图失败");
+    console.error("加载截图失败:", {
+      error: error,
+      message: error.message,
+      response: error.response?.data,
+    });
+    ElMessage.error(
+      "加载截图失败: " + (error.response?.data?.detail || error.message),
+    );
     screenshots.value = [];
     total.value = 0;
   } finally {
     loading.value = false;
+    console.log("加载完成，当前截图数量:", screenshots.value.length);
   }
 };
 
