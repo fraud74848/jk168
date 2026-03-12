@@ -552,93 +552,152 @@ async def get_current_user_info(
 
 
 # ==================== 客户端接口 ====================
-
-
 @app.post("/api/client/register", response_model=schemas.Client, tags=["客户端"])
 async def register_client(
     client_info: schemas.ClientCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """客户端注册"""
+    """客户端注册 - 每个客户端创建独立的员工记录"""
 
     # 获取当前北京时间
     beijing_now = get_beijing_now()
-
-    # 检查是否已存在
-    existing_client = (
-        db.query(models.Client)
-        .filter(
-            (models.Client.client_id == client_info.client_id)
-            | (models.Client.mac_address == client_info.mac_address)
-        )
-        .first()
+    logger.info(
+        f"收到注册请求: client_id={client_info.client_id}, computer={client_info.computer_name}"
     )
 
-    # ===== 新增：从客户端信息中获取姓名 =====
-    employee_name = None
-    if hasattr(client_info, "employee_name") and client_info.employee_name:
-        employee_name = client_info.employee_name
+    # ========== 1. 获取客户端信息 ==========
+    employee_name = getattr(client_info, "employee_name", None)
+    if employee_name:
         logger.info(f"客户端传入姓名: {employee_name}")
-    # ======================================
 
+    # ========== 2. 检查客户端是否存在 ==========
+    existing_client = None
+    client_found_by = None
+
+    # 优先使用client_id查找
+    if client_info.client_id:
+        existing_client = (
+            db.query(models.Client)
+            .filter(models.Client.client_id == client_info.client_id)
+            .first()
+        )
+        if existing_client:
+            client_found_by = "client_id"
+
+    # 其次使用mac_address查找
+    if not existing_client and client_info.mac_address:
+        existing_client = (
+            db.query(models.Client)
+            .filter(models.Client.mac_address == client_info.mac_address)
+            .first()
+        )
+        if existing_client:
+            client_found_by = "mac_address"
+
+    # 最后使用计算机名+用户名组合查找（可选）
+    if not existing_client and client_info.computer_name and client_info.windows_user:
+        existing_client = (
+            db.query(models.Client)
+            .filter(
+                models.Client.computer_name == client_info.computer_name,
+                models.Client.windows_user == client_info.windows_user,
+            )
+            .first()
+        )
+        if existing_client:
+            client_found_by = "computer_user_combo"
+
+    # ========== 3. 处理现有客户端 ==========
     if existing_client:
-        for key, value in client_info.dict(exclude_unset=True).items():
-            setattr(existing_client, key, value)
+        logger.info(f"找到现有客户端 [{client_found_by}]: {existing_client.client_id}")
+
+        # 更新客户端信息
+        update_data = client_info.dict(exclude_unset=True)
+        for key, value in update_data.items():
+            if value is not None:
+                setattr(existing_client, key, value)
+
         existing_client.last_seen = beijing_now
-        db.commit()
-        db.refresh(existing_client)
-        logger.info(f"客户端更新: {existing_client.client_id}")
-        return existing_client
 
-    # 生成员工ID
-    if client_info.computer_name and client_info.windows_user:
-        employee_id = f"{client_info.computer_name}\\{client_info.windows_user}"
-    else:
-        employee_id = client_info.computer_name or str(uuid.uuid4())
-
-    # 检查员工是否存在
-    employee = (
-        db.query(models.Employee)
-        .filter(models.Employee.employee_id == employee_id)
-        .first()
-    )
-
-    if not employee:
-        # ===== 修改：优先使用客户端传入的姓名 =====
-        if employee_name:
-            # 使用用户输入的姓名
-            final_name = employee_name
-        else:
-            # 降级方案：使用计算机名和用户名组合
-            final_name = (
-                f"{client_info.computer_name} - {client_info.windows_user}"
-                if client_info.windows_user
-                else client_info.computer_name
+        # 如果提供了新姓名，更新关联的员工
+        if employee_name and existing_client.employee_id:
+            employee = (
+                db.query(models.Employee)
+                .filter(models.Employee.employee_id == existing_client.employee_id)
+                .first()
             )
 
-        employee = models.Employee(
-            employee_id=employee_id,
-            name=final_name,  # 使用用户输入的姓名
-            computer_name=client_info.computer_name,
-            windows_user=client_info.windows_user,
-            department="自动注册",
-            status="active",
-        )
-        db.add(employee)
-        logger.info(f"自动创建员工: {employee_id} 姓名: {final_name}")
-    else:
-        # ===== 新增：如果员工已存在但姓名是默认值，可以更新为真实姓名 =====
-        if employee_name and (
-            not employee.name or employee.name.startswith(employee.computer_name)
-        ):
-            employee.name = employee_name
-            logger.info(f"更新员工姓名: {employee_id} -> {employee_name}")
-    # ============================================================
+            if employee and employee.name != employee_name:
+                old_name = employee.name
+                # 只有当现有姓名是默认生成时才更新
+                if not employee.name or employee.name.startswith(
+                    employee.computer_name or ""
+                ):
+                    employee.name = employee_name
+                    logger.info(
+                        f"更新员工姓名: {employee.employee_id} {old_name} -> {employee_name}"
+                    )
 
-    # 创建客户端
+        db.commit()
+        db.refresh(existing_client)
+        logger.info(f"客户端更新完成: {existing_client.client_id}")
+
+        # 记录活动
+        background_tasks.add_task(
+            log_activity,
+            existing_client.employee_id,
+            "client_updated",
+            {"client_id": existing_client.client_id, "name": employee_name},
+        )
+
+        return existing_client
+
+    # ========== 4. 创建新客户端和新员工 ==========
+    logger.info("创建新客户端和新员工")
+
+    # 生成唯一员工ID
+    unique_suffix = str(uuid.uuid4())[:8]
+
+    if client_info.computer_name and client_info.windows_user:
+        base_id = f"{client_info.computer_name}\\{client_info.windows_user}"
+        employee_id = f"{base_id}_{unique_suffix}"
+    elif client_info.computer_name:
+        employee_id = f"{client_info.computer_name}_{unique_suffix}"
+    else:
+        employee_id = f"employee_{unique_suffix}"
+
+    logger.info(f"生成唯一员工ID: {employee_id}")
+
+    # 确定员工姓名
+    if employee_name:
+        final_name = employee_name
+    elif client_info.windows_user:
+        final_name = (
+            f"{client_info.computer_name or '未知'} - {client_info.windows_user}"
+        )
+    else:
+        final_name = client_info.computer_name or f"员工_{unique_suffix[:4]}"
+
+    # 创建新员工
+    employee = models.Employee(
+        employee_id=employee_id,
+        name=final_name,
+        computer_name=client_info.computer_name,
+        windows_user=client_info.windows_user,
+        department="自动注册",
+        status="active",
+        created_at=beijing_now,
+    )
+    db.add(employee)
+    logger.info(f"✅ 创建新员工: {employee_id} 姓名: {final_name}")
+
+    # 生成客户端ID（如果未提供）
+    client_id = client_info.client_id or f"client_{unique_suffix}"
+
+    # 创建新客户端
     new_client = models.Client(
-        client_id=client_info.client_id or str(uuid.uuid4()),
+        client_id=client_id,
         employee_id=employee_id,
         computer_name=client_info.computer_name,
         windows_user=client_info.windows_user,
@@ -663,13 +722,18 @@ async def register_client(
     db.commit()
     db.refresh(new_client)
 
-    logger.info(f"新客户端注册: {new_client.client_id} ({employee_id})")
+    logger.info(f"✨ 新客户端注册成功: {new_client.client_id} -> 员工: {employee_id}")
 
+    # 记录活动
     background_tasks.add_task(
         log_activity,
         employee_id,
         "client_registered",
-        {"client_id": new_client.client_id, "name": employee_name},
+        {
+            "client_id": new_client.client_id,
+            "name": employee_name,
+            "computer_name": client_info.computer_name,
+        },
     )
 
     return new_client
@@ -702,6 +766,22 @@ async def client_heartbeat(
     client.ip_address = heartbeat.ip_address or client.ip_address
 
     db.commit()
+
+    import random
+
+    if random.randint(1, 10) == 1:  # 10%的概率记录
+        background_tasks.add_task(
+            log_activity,
+            client.employee_id,
+            "heartbeat",
+            {"client_id": client_id, "status": heartbeat.status},
+        )
+
+    return {
+        "status": "ok",
+        "server_time": beijing_now.isoformat(),
+        "config": client.config,
+    }
 
     return {
         "status": "ok",
@@ -872,6 +952,21 @@ async def upload_screenshot(
     )
 
     db.add(screenshot)
+
+    try:
+        activity = models.Activity(
+            employee_id=employee_id,
+            action="screenshot",
+            details={
+                "screenshot_id": screenshot.id,
+                "file_size": file_size,
+                "format": format,
+            },
+        )
+        db.add(activity)
+    except Exception as e:
+        logger.error(f"记录活动失败: {e}")
+
     db.commit()
 
     logger.info(
@@ -1879,41 +1974,131 @@ def get_cleanup_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """获取清理状态"""
-    now = datetime.utcnow()
-    cutoff = now - timedelta(hours=Config.SCREENSHOT_RETENTION_HOURS)
+    """获取清理状态 - 优化版"""
 
-    # 待清理的截图数量
-    pending_count = (
-        db.query(models.Screenshot)
-        .filter(models.Screenshot.screenshot_time < cutoff)
-        .count()
-    )
+    from server_timezone import get_beijing_now, utc_to_beijing
+    from sqlalchemy import func
+    import logging
 
-    # 待清理的总大小
-    pending_size = (
-        db.query(func.sum(models.Screenshot.file_size))
-        .filter(models.Screenshot.screenshot_time < cutoff)
-        .scalar()
-        or 0
-    )
+    logger = logging.getLogger(__name__)
 
-    # 上次清理时间
-    last_cleanup = (
-        db.query(models.Activity)
-        .filter(models.Activity.action == "auto_cleanup")
-        .order_by(models.Activity.created_at.desc())
-        .first()
-    )
+    try:
+        # ===== 使用北京时间计算待清理的数据 =====
+        beijing_now = get_beijing_now()
+        cutoff = beijing_now - timedelta(hours=Config.SCREENSHOT_RETENTION_HOURS)
 
-    return {
-        "enabled": Config.AUTO_CLEANUP_ENABLED,
-        "retention_hours": Config.SCREENSHOT_RETENTION_HOURS,
-        "interval_hours": Config.CLEANUP_INTERVAL / 3600,
-        "pending_cleanup": pending_count,
-        "pending_size_mb": round(pending_size / (1024 * 1024), 2),
-        "last_cleanup": last_cleanup.created_at.isoformat() if last_cleanup else None,
-    }
+        logger.info(f"清理状态计算 - 北京时间: {beijing_now}, 截止: {cutoff}")
+
+        # ===== 优化：一次查询获取数量和总和 =====
+        # 使用子查询或直接查询
+        pending_stats = (
+            db.query(
+                func.count(models.Screenshot.id).label("count"),
+                func.coalesce(func.sum(models.Screenshot.file_size), 0).label(
+                    "total_size"
+                ),
+            )
+            .filter(models.Screenshot.screenshot_time < cutoff)
+            .first()
+        )
+
+        pending_count = pending_stats.count if pending_stats else 0
+        pending_size = pending_stats.total_size if pending_stats else 0
+
+        logger.info(f"待清理截图: {pending_count}张, {pending_size/1024/1024:.2f}MB")
+
+        # ===== 获取上次清理时间 =====
+        last_cleanup = (
+            db.query(models.Activity)
+            .filter(models.Activity.action == "auto_cleanup")
+            .order_by(models.Activity.created_at.desc())
+            .first()
+        )
+
+        # 转换上次清理时间为北京时间（如果数据库存的是UTC）
+        last_cleanup_time = None
+        if last_cleanup and last_cleanup.created_at:
+            # 假设数据库存储的是UTC，转换为北京时间
+            last_cleanup_time = utc_to_beijing(last_cleanup.created_at)
+            logger.debug(
+                f"上次清理时间(UTC): {last_cleanup.created_at}, (北京): {last_cleanup_time}"
+            )
+
+        # ===== 获取清理配置 =====
+        cleanup_interval = getattr(Config, "CLEANUP_INTERVAL", 21600)  # 默认6小时
+        interval_hours = cleanup_interval / 3600 if cleanup_interval else 6
+
+        # ===== 计算下次清理时间 =====
+        next_cleanup_time = None
+        if Config.AUTO_CLEANUP_ENABLED and last_cleanup_time:
+            # 下次清理时间 = 上次清理时间 + 间隔
+            next_cleanup_time = last_cleanup_time + timedelta(seconds=cleanup_interval)
+            logger.debug(f"下次清理时间: {next_cleanup_time}")
+
+        # ===== 获取清理时间段配置 =====
+        cleanup_time = getattr(Config, "CLEANUP_TIME", None)
+
+        # ===== 计算存储统计 =====
+        # 获取总截图数量和大小
+        total_stats = db.query(
+            func.count(models.Screenshot.id).label("total_count"),
+            func.coalesce(func.sum(models.Screenshot.file_size), 0).label("total_size"),
+        ).first()
+
+        total_count = total_stats.total_count if total_stats else 0
+        total_size = total_stats.total_size if total_stats else 0
+
+        # 计算已用存储百分比
+        storage_used_percent = 0
+        if total_size > 0:
+            storage_used_percent = (
+                round((pending_size / total_size) * 100, 2) if total_size > 0 else 0
+            )
+
+        return {
+            # 配置信息
+            "enabled": Config.AUTO_CLEANUP_ENABLED,
+            "retention_hours": Config.SCREENSHOT_RETENTION_HOURS,
+            "interval_hours": round(interval_hours, 1),
+            "cleanup_time": cleanup_time,
+            # 待清理信息
+            "pending_cleanup": pending_count,
+            "pending_size_mb": round(pending_size / (1024 * 1024), 2),
+            "pending_percent": storage_used_percent,
+            # 总存储信息
+            "total_screenshots": total_count,
+            "total_size_mb": round(total_size / (1024 * 1024), 2),
+            # 时间信息
+            "current_time": beijing_now.isoformat(),
+            "cutoff_time": cutoff.isoformat(),
+            "last_cleanup": (
+                last_cleanup_time.isoformat() if last_cleanup_time else None
+            ),
+            "next_cleanup": (
+                next_cleanup_time.isoformat() if next_cleanup_time else None
+            ),
+            # 状态信息
+            "has_pending": pending_count > 0,
+            "is_overdue": (
+                next_cleanup_time and beijing_now > next_cleanup_time
+                if next_cleanup_time
+                else False
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"获取清理状态失败: {str(e)}", exc_info=True)
+
+        # 返回基本配置，避免前端完全无法显示
+        return {
+            "enabled": Config.AUTO_CLEANUP_ENABLED,
+            "retention_hours": Config.SCREENSHOT_RETENTION_HOURS,
+            "interval_hours": getattr(Config, "CLEANUP_INTERVAL", 21600) / 3600,
+            "pending_cleanup": 0,
+            "pending_size_mb": 0,
+            "last_cleanup": None,
+            "error": str(e) if Config.DEBUG else "获取状态失败",
+        }
 
 
 # ==================== 文件服务 ====================

@@ -256,6 +256,7 @@ const stats = ref([
 const loadStats = async () => {
   try {
     const data = await statsApi.getStats();
+    console.log("仪表盘数据:", data); // 添加调试日志
 
     stats.value[0].value = data.today;
     stats.value[1].value = data.online;
@@ -272,12 +273,20 @@ const loadStats = async () => {
       };
     }
 
+    // 确保数据结构正确
     recentActivities.value = data.recent_activities || [];
+    console.log("最近活动:", recentActivities.value);
+
     topEmployees.value = data.top_employees || [];
+    console.log("TOP员工:", topEmployees.value);
 
     // 渲染图表
-    renderHourlyChart(data.hourly);
-    renderFormatChart(data.image_formats);
+    if (data.hourly) {
+      renderHourlyChart(data.hourly);
+    }
+    if (data.image_formats) {
+      renderFormatChart(data.image_formats);
+    }
   } catch (error) {
     console.error("加载统计数据失败:", error);
   }

@@ -328,18 +328,30 @@ const loadStats = async () => {
 const loadEmployeeRank = async () => {
   rankLoading.value = true;
   try {
-    const employees = await employeeApi.getEmployees();
+    const response = await employeeApi.getEmployees({ limit: 100 });
+    console.log("员工数据:", response); // 添加调试日志
+
+    // 处理返回的数据格式
+    let employees = [];
+    if (response && response.items) {
+      employees = response.items;
+    } else if (Array.isArray(response)) {
+      employees = response;
+    }
+
     employeeRank.value = employees
       .map((emp) => ({
-        id: emp.id,
+        id: emp.id || emp.employee_id,
         name: emp.name,
         value:
           rankType.value === "today"
-            ? emp.today_screenshots
-            : emp.total_screenshots,
+            ? emp.today_screenshots || 0
+            : emp.total_screenshots || 0,
       }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 10);
+
+    console.log("员工排行:", employeeRank.value);
   } catch (error) {
     console.error("加载员工排行失败:", error);
   } finally {
